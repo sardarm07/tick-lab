@@ -1,0 +1,193 @@
+# Tick Lab services. Use them through the Makefile, which sets the project name
+# (ticklab for live, ticklab-replay for replays, so each has its own volumes) and the
+# sizing file (config/sizing/lite.env or full.env).
+#
+# Profiles: `live` adds the producers, `console` adds Redpanda Console. The replay stack
+# runs the shared services only; the replay tool publishes into it from outside Docker.
+# Ports are bound to 127.0.0.1, so nothing is reachable from other machines.
+
+x-python: &python
+  build:
+    context: .
+    dockerfile: docker/python.Dockerfile
+  image: ticklab-python:dev
+  user: "1000:1000"
+
+x-python-env: &python-env
+  KAFKA_BOOTSTRAP: redpanda:9092
+  SCHEMA_REGISTRY_URL: http://redpanda:8081
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+  TICKLAB_STACK: ${TICKLAB_STACK:-live}
+
+services:
+  redpanda:
+    image: redpandadata/redpanda:v26.2.4
+    command:
+      - redpanda
+      - start
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://127.0.0.1:19092
+      - --schema-registry-addr=internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr=redpanda:33145
+      - --advertise-rpc-addr=redpanda:33145
+      - --mode=dev-container
+      - --smp=1
+      - --memory=${REDPANDA_MEMORY}
+      - --default-log-level=warn
+    ports:
+      - 127.0.0.1:19092:19092
+      - 127.0.0.1:18081:18081
+    volumes:
+      - redpanda:/var/lib/redpanda/data
+    mem_limit: ${REDPANDA_MEM_LIMIT}
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -Eq 'Healthy:[[:space:]]+true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8.22.13
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    ports:
+      - 127.0.0.1:8123:8123
+    volumes:
+      - clickhouse:/var/lib/clickhouse
+      - ./infra/clickhouse/config.d/ticklab.xml:/etc/clickhouse-server/config.d/ticklab.xml:ro
+      - ./infra/clickhouse/users.d/ticklab.xml:/etc/clickhouse-server/users.d/ticklab.xml:ro
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    mem_limit: ${CLICKHOUSE_MEM_LIMIT}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8123/ping | grep -q Ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  init:
+    <<: *python
+    command: ["python", "-m", "ticklab", "init"]
+    environment: *python-env
+    depends_on:
+      redpanda: {condition: service_healthy}
+      clickhouse: {condition: service_healthy}
+    mem_limit: 200m
+    restart: "no"
+
+  prometheus:
+    image: prom/prometheus:v3.13.4
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=1GB
+    ports:
+      - 127.0.0.1:9090:9090
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus:/prometheus
+    mem_limit: ${PROMETHEUS_MEM_LIMIT}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.3-slim
+    # Installs exactly the two plugins this stack uses, at pinned versions, the first time.
+    # Grafana's own preinstall step is off: it would also add its whole default plugin set,
+    # about 500 MB on disk and 70 MB of memory.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        for plugin in grafana-clickhouse-datasource:4.22.1 prometheus:13.2.3; do
+          id=$${plugin%%:*}
+          version=$${plugin##*:}
+          if ! grep -q "\"version\": *\"$$version\"" "/var/lib/grafana/plugins/$$id/plugin.json" 2>/dev/null; then
+            grafana cli --pluginsDir /var/lib/grafana/plugins plugins install "$$id" "$$version"
+          fi
+        done
+        exec /run.sh
+    environment:
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    ports:
+      - 127.0.0.1:3000:3000
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana:/var/lib/grafana
+    mem_limit: ${GRAFANA_MEM_LIMIT}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health | grep -q ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    restart: unless-stopped
+
+  producer-binance:
+    <<: *python
+    profiles: [live]
+    command: ["python", "-m", "ticklab", "produce", "binance"]
+    environment:
+      <<: *python-env
+      BINANCE_WS_URL: ${BINANCE_WS_URL}
+      BINANCE_MAX_CONNECTION_AGE_S: ${BINANCE_MAX_CONNECTION_AGE_S}
+      FEED_STALE_AFTER_S: ${FEED_STALE_AFTER_S}
+      RECORDINGS_DIR: /data/recordings
+    volumes:
+      - ./data/recordings:/data/recordings
+    depends_on:
+      init: {condition: service_completed_successfully}
+    mem_limit: ${PRODUCER_MEM_LIMIT}
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/metrics', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+  console:
+    image: redpandadata/console:v3.12.0
+    profiles: [console]
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      SCHEMAREGISTRY_ENABLED: "true"
+      SCHEMAREGISTRY_URLS: http://redpanda:8081
+    ports:
+      - 127.0.0.1:8080:8080
+    depends_on:
+      redpanda: {condition: service_healthy}
+    mem_limit: 150m
+    restart: unless-stopped
+
+volumes:
+  redpanda:
+  clickhouse:
+  prometheus:
+  grafana:

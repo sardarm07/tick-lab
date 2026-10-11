@@ -1,0 +1,26 @@
+# The markets Tick Lab follows.
+#
+# A feed is one market on one exchange. Each feed gets its own partition of the
+# `trades` topic, so every partition is one ordered log with one watermark.
+# A feed's partition number must never change once data has been written.
+#
+# symbol: BASE/QUOTE, the same spelling on every exchange.
+# native: the exchange's own name for the market.
+
+[[feeds]]
+exchange = "BINANCE"
+symbol = "BTC/USDT"
+native = "BTCUSDT"
+partition = 0
+
+[[feeds]]
+exchange = "BINANCE"
+symbol = "ETH/USDT"
+native = "ETHUSDT"
+partition = 1
+
+[[feeds]]
+exchange = "BINANCE"
+symbol = "SOL/USDT"
+native = "SOLUSDT"
+partition = 2

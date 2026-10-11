@@ -1,0 +1,36 @@
+[project]
+name = "ticklab"
+version = "0.1.0"
+description = "A live crypto trade monitor, built to learn stream processing."
+readme = "README.md"
+requires-python = "==3.12.*"
+dependencies = [
+    "confluent-kafka==2.16.0",
+    "fastavro==1.13.1",
+    "httpx==0.28.1",
+    "prometheus-client==0.26.0",
+    "websockets==17.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.17.0",
+]
+
+[tool.uv]
+# The code runs as `python -m ticklab` from the repository root; nothing is built or installed.
+package = false
+required-version = "==0.12.24"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"

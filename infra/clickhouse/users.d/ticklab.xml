@@ -1,0 +1,10 @@
+<!-- Query settings for every user on a small machine. -->
+<clickhouse>
+    <profiles>
+        <default>
+            <max_threads>2</max_threads>
+            <!-- A query that needs more fails with a clear error instead of starving inserts. -->
+            <max_memory_usage>400000000</max_memory_usage>
+        </default>
+    </profiles>
+</clickhouse>

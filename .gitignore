@@ -1,0 +1,17 @@
+# Local settings, copied from .env.example
+.env
+
+# Recordings, exchange history and check output stay on the machine that made them
+data/
+
+# Python
+__pycache__/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Java build output
+target/
+
+# macOS
+.DS_Store

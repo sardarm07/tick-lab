@@ -1,0 +1,48 @@
+{
+  "type": "record",
+  "name": "Trade",
+  "namespace": "ticklab.v1",
+  "doc": "One trade from any exchange, normalised. Prices and quantities are exact decimals.",
+  "fields": [
+    {
+      "name": "exchange",
+      "type": {"type": "enum", "name": "Exchange", "symbols": ["BINANCE", "KRAKEN"]}
+    },
+    {"name": "symbol", "type": "string", "doc": "BASE/QUOTE, for example BTC/USDT"},
+    {"name": "base", "type": "string"},
+    {"name": "quote", "type": "string"},
+    {"name": "trade_id", "type": "long", "doc": "The exchange's trade ID, increasing within a market"},
+    {
+      "name": "price",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12}
+    },
+    {
+      "name": "quantity",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12}
+    },
+    {
+      "name": "taker_side",
+      "type": {"type": "enum", "name": "Side", "symbols": ["BUY", "SELL"]},
+      "doc": "The side of the order that took liquidity"
+    },
+    {
+      "name": "trade_time",
+      "type": {"type": "long", "logicalType": "timestamp-micros"},
+      "doc": "When the exchange matched the trade (event time)"
+    },
+    {
+      "name": "received_time",
+      "type": ["null", {"type": "long", "logicalType": "timestamp-micros"}],
+      "default": null,
+      "doc": "When the frame reached the producer; null for history, which never arrived live"
+    },
+    {
+      "name": "source",
+      "type": {
+        "type": "enum",
+        "name": "Source",
+        "symbols": ["WS", "WS_SNAPSHOT", "REST", "HISTORY"]
+      }
+    }
+  ]
+}
