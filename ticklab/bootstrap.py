@@ -19,11 +19,15 @@ log = logging.getLogger(__name__)
 
 SQL_DIR = ROOT / "infra" / "clickhouse" / "sql"
 TRADES_RETENTION_MS = 24 * 3600 * 1000
+# Topics the Flink jobs write to; one partition each is plenty for one row per minute.
+OUTPUT_TOPICS = ("candles", "late-trades")
 
 
 def run(settings: Settings) -> None:
     partitions = len(load_feeds())
     ensure_topic(settings, settings.trades_topic, partitions)
+    for topic in OUTPUT_TOPICS:
+        ensure_topic(settings, topic, 1)
     schema_text, _ = avro.load_schema()
     topic_subject = avro.subject(settings.trades_topic)
     schema_id = avro.register(settings.schema_registry_url, topic_subject, schema_text)

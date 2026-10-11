@@ -6,7 +6,7 @@ import argparse
 import asyncio
 import logging
 import sys
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 
@@ -59,6 +59,19 @@ def _parser() -> argparse.ArgumentParser:
     _day_range(sub)
     sub.add_argument("--speed", type=float, help="1 = real time; omit for as fast as possible")
     sub.set_defaults(run=_replay_history)
+
+    command = commands.add_parser("flink", help="start, stop or drain the core job")
+    command.add_argument("action", choices=["start", "stop", "drain", "status"])
+    command.set_defaults(run=_flink)
+
+    command = commands.add_parser("reconcile", help="compare our candles with official ones")
+    reconciles = command.add_subparsers(required=True)
+    sub = reconciles.add_parser("live", help="every minute, as minutes settle")
+    sub.add_argument("--metrics-port", type=int, default=8000)
+    sub.set_defaults(run=_reconcile_live)
+    sub = reconciles.add_parser("range", help="every minute in a range, once")
+    _time_range(sub)
+    sub.set_defaults(run=_reconcile_range)
 
     command = commands.add_parser("study", help="the M1 data study")
     studies = command.add_subparsers(required=True)
@@ -170,6 +183,70 @@ def _replay_history(settings: Settings, args: argparse.Namespace) -> int:
     result = replay.run(events, publisher, args.speed)
     log.info("replayed %d trades in %.1fs", result.trades, result.seconds)
     return 1 if result.undelivered or result.failed else 0
+
+
+def _flink(settings: Settings, args: argparse.Namespace) -> None:
+    from ticklab.flinkctl import Flink
+
+    flink = Flink(stack=settings.stack)
+    if args.action == "start":
+        # Idleness is for live data only: in a replay it would make backlogged trades late.
+        idleness = "10" if settings.stack == "live" else "0"
+        flink.start(
+            [
+                "--bootstrap",
+                "redpanda:9092",
+                "--registry",
+                "http://redpanda:8081",
+                "--idleness-seconds",
+                idleness,
+            ]
+        )
+    elif args.action == "stop":
+        flink.stop(drain=False)
+    elif args.action == "drain":
+        flink.stop(drain=True)
+    else:
+        for job in flink.jobs():
+            print(job["jid"], job["name"], job["state"])
+
+
+def _reconcile_live(settings: Settings, args: argparse.Namespace) -> None:
+    import signal
+    import threading
+
+    from prometheus_client import start_http_server
+
+    from ticklab.reconciler import Reconciler, binance_feeds
+
+    stop = threading.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: stop.set())
+    start_http_server(args.metrics_port)
+    reconciler = Reconciler(settings, binance_feeds(feeds_for(binance.EXCHANGE)))
+    try:
+        reconciler.run_live(stop)
+    finally:
+        reconciler.close()
+
+
+def _reconcile_range(settings: Settings, args: argparse.Namespace) -> int:
+    from ticklab.reconciler import Reconciler, binance_feeds, minute_floor, summary
+
+    first = minute_floor(args.start)
+    last = minute_floor(args.end) - timedelta(minutes=1)
+    reconciler = Reconciler(settings, binance_feeds(feeds_for(binance.EXCHANGE)))
+    results = []
+    try:
+        for feed in reconciler.feeds:
+            results += reconciler.check(feed, first, last, attempt=1)
+    finally:
+        reconciler.close()
+    print(summary(results))
+    for r in [r for r in results if r.differences][:10]:
+        detail = "; ".join(r.differences)
+        print(f"- {r.feed.symbol} {r.minute:%Y-%m-%d %H:%M} ({r.cause}): {detail}")
+    return 1 if any(r.differences for r in results) else 0
 
 
 def _study_disorder(settings: Settings, args: argparse.Namespace) -> None:

@@ -7,6 +7,14 @@ scrape_configs:
     static_configs:
       - targets: ["producer-binance:8000"]
 
+  - job_name: reconciler
+    static_configs:
+      - targets: ["reconciler:8000"]
+
+  - job_name: flink
+    static_configs:
+      - targets: ["flink-jobmanager:9249", "flink-taskmanager:9249"]
+
   - job_name: redpanda
     metrics_path: /public_metrics
     static_configs:

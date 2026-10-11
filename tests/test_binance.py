@@ -37,7 +37,7 @@ def test_stream_url_asks_for_microseconds():
     url = binance.stream_url("wss://stream.binance.com:9443", feeds)
     assert url == (
         "wss://stream.binance.com:9443/stream?streams=btcusdt@trade/ethusdt@trade"
-        "&timeUnit=MICROSECOND"
+        "/btcusdt@blockTrade/ethusdt@blockTrade&timeUnit=MICROSECOND"
     )
     assert binance.time_scale(url) == 1
     assert binance.time_scale(MS_URL) == 1000
@@ -79,6 +79,23 @@ def test_server_shutdown_is_recognised():
         {"stream": "!serverShutdown", "data": {"e": "serverShutdown", "E": 1770123456789}}
     )
     assert binance.parse_frame(raw, 0, FEEDS, 1).shutdown
+
+
+def test_block_trades_are_flagged_not_normalised():
+    data = {
+        "e": "blockTrade",
+        "E": 1772506983582,
+        "s": "BTCUSDT",
+        "t": 582,
+        "p": "0.052",
+        "q": "5838",
+        "T": 1772506983321,
+        "m": True,
+    }
+    frame = binance.parse_frame(
+        json.dumps({"stream": "btcusdt@blockTrade", "data": data}), 0, FEEDS, 1
+    )
+    assert frame.block_trade and frame.trades == ()
 
 
 def test_other_messages_carry_no_trades():

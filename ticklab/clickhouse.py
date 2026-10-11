@@ -31,7 +31,11 @@ class ClickHouse:
         return response.text
 
     def rows(self, sql: str, **params: Any) -> list[dict]:
-        text = self.execute(sql.rstrip().rstrip(";") + "\nFORMAT JSONEachRow", **params)
+        """Rows as dicts. Decimals and 64-bit integers come back as strings, so nothing passes
+        through a float on the way."""
+        query = sql.rstrip().rstrip(";")
+        query += "\nSETTINGS output_format_json_quote_decimals = 1\nFORMAT JSONEachRow"
+        text = self.execute(query, **params)
         return [json.loads(line) for line in text.splitlines() if line]
 
     def value(self, sql: str, **params: Any) -> Any:

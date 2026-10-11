@@ -185,6 +185,8 @@ class LiveStream:
                 "%s: connection %d: server shutdown announced", self._exchange, conn.conn_id
             )
             conn.shutdown_announced.set()
+        elif frame.block_trade:
+            metrics.FRAMES.labels(self._exchange, "block_trade").inc()
         elif frame.trades:
             metrics.FRAMES.labels(self._exchange, "trade").inc()
             conn.first_trade.set()

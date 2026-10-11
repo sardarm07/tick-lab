@@ -1,0 +1,58 @@
+{
+  "type": "record",
+  "name": "Candle",
+  "namespace": "ticklab.v1",
+  "doc": "One 1-minute candle of one feed, built from deduplicated trades in event time. A late trade re-emits the candle with a higher trade_count.",
+  "fields": [
+    {"name": "exchange", "type": "ticklab.v1.Exchange"},
+    {"name": "symbol", "type": "string"},
+    {
+      "name": "minute",
+      "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "doc": "Start of the minute, UTC"
+    },
+    {
+      "name": "open",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "Price of the trade with the lowest ID"
+    },
+    {"name": "high", "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12}},
+    {"name": "low", "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12}},
+    {
+      "name": "close",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "Price of the trade with the highest ID"
+    },
+    {
+      "name": "volume",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "Sum of quantities, in the base asset"
+    },
+    {
+      "name": "quote_volume",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "Sum of price times quantity, in the quote asset"
+    },
+    {
+      "name": "taker_buy_volume",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12}
+    },
+    {
+      "name": "taker_buy_quote_volume",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12}
+    },
+    {
+      "name": "vwap",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "quote_volume / volume, rounded half-even to 12 decimal places"
+    },
+    {"name": "trade_count", "type": "long"},
+    {"name": "first_trade_id", "type": "long"},
+    {"name": "last_trade_id", "type": "long"},
+    {
+      "name": "emitted_at",
+      "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "doc": "Processing time when this version of the candle was emitted"
+    }
+  ]
+}

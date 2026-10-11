@@ -120,3 +120,84 @@ The M1 check kills the producer with `docker kill`, and Docker does *not* restar
 Restart policies apply when a process exits on its own, for example after a crash or an
 out-of-memory kill. `make up` (Compose) brings a stopped service back. The difference matters
 when testing recovery: a test should say which of the two it simulates.
+
+## Milestone 2: candles in Flink, checked against the exchange
+
+### Event time in Flink, and watermarks per partition
+
+The core job (`flink/src/main/java/ticklab/flink/CoreJob.java`) reads the `trades` topic and
+gives every trade its *event time*: the trade time, not the moment Flink sees it
+(`CorePipeline.watermarks`). Windows such as "12:00 to 12:01" are then defined by what happened
+when, so a replay at 10× speed produces exactly the candles of a live run.
+
+The Kafka source generates watermarks *per partition*, that is per feed (decision note 0002),
+and the job's watermark is the minimum over all of them. A feed that goes quiet would hold that
+minimum back and freeze every window, so a partition with nothing for 10 s is marked *idle* and
+left out until it speaks again.
+
+### Windows, allowed lateness and side outputs
+
+Candles are *tumbling event-time windows* of one minute, keyed by feed
+(`CorePipeline.build`). A window fires when the watermark passes its end, about 2 s after the
+minute (the bound B). The `CandleAggregate` keeps a small running summary instead of every trade,
+and takes open and close from the lowest and highest trade ID, so arrival order never changes
+the result (`CandleAggregateTest`).
+
+A trade can arrive after its window fired, for example one fetched by gap repair. *Allowed
+lateness* (L = 5 minutes) keeps each window's state that much longer: a late trade updates the
+candle and emits it again, with a higher `trade_count`, which ClickHouse uses as the version to
+keep. Anything later still goes to a *side output*, the `late-trades` topic, so nothing is
+dropped silently.
+
+### Keyed state: deduplication in one number per feed
+
+`Dedup.java` keeps, per feed, the highest ID up to which every trade has been seen, plus a
+small map of IDs that arrived ahead of a missing one. That is enough to recognise every repeat,
+and it shows where the gaps are. The state is *keyed*: Flink keeps one copy per feed and hands
+each trade only its own feed's state. A gap that stays open past the lateness budget is given up
+on, so the map can't grow without bound. `DedupTest` drives the operator through test harnesses
+that control input, watermarks and timers exactly.
+
+### Checkpoints, savepoints and draining
+
+Every 10 s Flink takes a *checkpoint*: a consistent snapshot of all state (deduplication, open
+windows) together with the Kafka offsets it corresponds to. After a crash it restarts from the
+last checkpoint and replays Kafka from those offsets, so state and input stay in step.
+
+A *savepoint* is the same snapshot taken on request. `make down` stops the job with one, and
+`make up` resumes from it (`ticklab/flinkctl.py`), so a stop loses nothing: windows that were
+open simply continue.
+
+*Draining* (`flink stop --drain`, `make replay-drain`) is different: it moves event time to the
+end of time first, so every open window and timer fires. A replay of a bounded input ends this
+way, or its last minutes would never close.
+
+### Idleness, and why replays switch it off
+
+Idleness is measured on the machine's clock, which makes it a trap when reading a backlog. In
+the first run of the milestone 2 checks, a whole day of history sat in Kafka at once. The Kafka
+consumer handed the job BTC and SOL records for more than 10 s before any ETH records, so the
+ETH partition was taken for idle and the watermark ran ahead without it. When ETH's trades
+finally came, their minutes were long past, and they went to `late-trades`. And when every
+partition had gone idle, draining didn't fire the last window.
+
+So idleness is for live data only (`--idleness-seconds`, decision note 0015). A replay lets the
+watermark wait for every feed: slower when one feed is quiet, but never wrong.
+
+### At-least-once output into idempotent storage
+
+After a restart from a checkpoint, Flink emits again whatever it had emitted since that
+checkpoint. Exactly-once delivery to Kafka would need transactions, which add a checkpoint
+interval of latency to every result. Here the sinks are *at-least-once* (`Sinks.java`), and the
+storage makes repeats harmless: each candle has a deterministic key, and ClickHouse keeps one
+version per key, the one with the most trades (decision note 0003).
+
+### Reconciliation: proving the numbers
+
+The reconciler (`ticklab/reconciler.py`) fetches Binance's official 1-minute candles and
+compares every field exactly: open, high, low, close, volume, quote volume, trade count and the
+taker-buy volumes. It waits until a minute has *settled*, 6 minutes after it ends (B + L + a
+margin), and until the job has emitted a candle at least L newer, so neither the clock nor a
+backlog makes it compare too early. Each mismatch gets a likely cause: the producer was down,
+trades came too late, IDs are missing, or unknown. The goal is not "no mismatches" but "no
+*unexplained* mismatch".

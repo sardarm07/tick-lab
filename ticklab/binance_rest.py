@@ -59,3 +59,28 @@ def trades_between_ids(
         next_id = page[-1].trade_id + 1
         time.sleep(0.5)  # stays far below the weight limit
     return trades
+
+
+KLINES_URL = "https://data-api.binance.vision/api/v3/klines"
+
+
+def klines(client: httpx.Client, feed: Feed, start_ms: int, end_ms: int) -> tuple[str, str]:
+    """Official 1-minute candles opening in [start_ms, end_ms], as (request URL, raw JSON text).
+
+    Weight 2 per request, up to 1,000 candles. Each row is [open time, open, high, low, close,
+    volume, close time, quote volume, trades, taker buy volume, taker buy quote volume, -].
+    """
+    response = client.get(
+        KLINES_URL,
+        params={
+            "symbol": feed.native,
+            "interval": "1m",
+            "startTime": start_ms,
+            "endTime": end_ms,
+            "limit": 1000,
+        },
+    )
+    if response.status_code in (418, 429):
+        raise RuntimeError(f"Binance rate limit ({response.status_code}); stop and wait")
+    response.raise_for_status()
+    return str(response.url), response.text

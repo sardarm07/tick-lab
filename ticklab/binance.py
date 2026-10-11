@@ -9,6 +9,8 @@ web-socket-streams.md and CHANGELOG.md, plus the daily files on data.binance.vis
 - Times are milliseconds unless the URL asks for `timeUnit=MICROSECOND`. The live stream
   asks for microseconds, the unit of the daily history files.
 - A `serverShutdown` event means the server is about to close the connection.
+- `@blockTrade` events (since 2026) are off-exchange block trades with their own IDs. Whether
+  they count in official candles is undocumented, so they are recorded and counted only.
 - History CSV columns, without a header row: trade ID, price, qty, quoteQty, time,
   isBuyerMaker, isBestMatch. `time` is in microseconds from 2025-01-01 onwards.
 """
@@ -27,9 +29,9 @@ HISTORY_MICROSECONDS_FROM = date(2025, 1, 1)
 
 
 def stream_url(base: str, feeds: list[Feed]) -> str:
-    """One combined stream for all pairs, with times in microseconds."""
-    streams = "/".join(f"{feed.native.lower()}@trade" for feed in feeds)
-    return f"{base}/stream?streams={streams}&timeUnit=MICROSECOND"
+    """One combined stream for all pairs' trades and block trades, times in microseconds."""
+    names = [f"{feed.native.lower()}@{kind}" for kind in ("trade", "blockTrade") for feed in feeds]
+    return f"{base}/stream?streams={'/'.join(names)}&timeUnit=MICROSECOND"
 
 
 def time_scale(url: str) -> int:
@@ -47,6 +49,8 @@ def parse_frame(raw: str, received_us: int, feeds: dict[str, Feed], scale: int) 
         return Frame(trades=(_ws_trade(data, received_us, feeds, scale),))
     if event == "serverShutdown":
         return Frame(shutdown=True)
+    if event == "blockTrade":
+        return Frame(block_trade=True)
     return Frame()  # for example a reply to a request: nothing to publish
 
 

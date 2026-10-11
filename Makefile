@@ -15,8 +15,12 @@ COMPOSE := docker compose --env-file .env --env-file config/sizing/$(SIZE).env
 LIVE := $(COMPOSE) -p ticklab
 REPLAY := TICKLAB_STACK=replay $(COMPOSE) -p ticklab-replay
 
-.PHONY: help up down ps logs console replay-up replay-down replay replay-history record \
-	history study-disorder study-gaps lint test ci check-m1 codespace-network
+.PHONY: help up down ps logs console replay-up replay-down replay replay-history replay-drain \
+	record history study-disorder study-gaps reconcile lint test test-java ci check-m1 \
+	check-m2 codespace-network
+
+JAR := flink/target/ticklab-flink.jar
+JAVA_SOURCES := $(shell find flink/src/main schemas -type f) flink/pom.xml
 
 help: ## List the targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -27,11 +31,16 @@ help: ## List the targets
 data/recordings data/history:
 	mkdir -p $@
 
-up: .env codespace-network | data/recordings ## Start the live stack: exchanges -> producers -> Redpanda -> ClickHouse
+$(JAR): $(JAVA_SOURCES)
+	cd flink && ./mvnw -B -q package -DskipTests
+
+up: .env codespace-network $(JAR) | data/recordings ## Start the live stack, and the Flink job (resuming its state)
 	@if [ -n "$$($(REPLAY) ps -q)" ]; then echo "The replay stack is running: make replay-down"; exit 1; fi
 	$(LIVE) --profile live up -d --build --wait
+	$(UV_ENV) python -m ticklab flink start
 
-down: .env ## Stop the live stack (volumes are kept)
+down: .env ## Stop the live stack; the Flink job first takes a savepoint (volumes are kept)
+	-@if [ -n "$$($(LIVE) ps -q flink-jobmanager)" ]; then $(UV_ENV) python -m ticklab flink stop; fi
 	$(LIVE) --profile live --profile console down
 
 ps: .env ## Show the live stack's containers
@@ -43,13 +52,19 @@ logs: .env ## Follow the live stack's logs
 console: .env ## Add Redpanda Console to the live stack (http://localhost:8080)
 	$(LIVE) --profile console up -d --wait console
 
-replay-up: .env codespace-network ## Start an empty replay stack
+replay-up: .env codespace-network $(JAR) ## Start an empty replay stack with a fresh Flink job
 	@if [ -n "$$($(LIVE) ps -q)" ]; then echo "The live stack is running: make down"; exit 1; fi
 	$(REPLAY) down -v
+	rm -f data/flink/replay/last-savepoint
 	$(REPLAY) up -d --build --wait
+	TICKLAB_STACK=replay $(UV_ENV) python -m ticklab flink start
+
+replay-drain: .env ## End a replay: Flink drains, so every remaining window fires
+	TICKLAB_STACK=replay $(UV_ENV) python -m ticklab flink drain
 
 replay-down: .env ## Stop the replay stack and delete its data
 	$(REPLAY) down -v
+	rm -f data/flink/replay/last-savepoint
 
 replay: .env ## Replay recordings: make replay FROM=2026-10-11T10:00 TO=2026-10-11T10:15 [SESSION=live-] [SPEED=10]
 	$(UV_ENV) python -m ticklab replay recordings --from $(FROM) --to $(TO) \
@@ -73,6 +88,9 @@ study-disorder: .env ## Arrival disorder in recordings: make study-disorder FROM
 study-gaps: .env ## Gaps between trades in history: make study-gaps FROM=2026-10-03 TO=2026-10-09
 	$(UV_ENV) python -m ticklab study gaps --from $(FROM) --to $(TO)
 
+reconcile: .env ## Compare candles with official ones: make reconcile FROM=2026-10-10T00:00 TO=2026-10-11T00:00
+	$(UV_ENV) python -m ticklab reconcile range --from $(FROM) --to $(TO)
+
 # GitHub Codespaces' default image (October 2026) runs Docker with iptables-nft rules, but
 # leftover iptables-legacy rules are also active: their FORWARD policy is DROP and they only
 # allow Docker's default bridge, so every Compose network is cut off, between containers and
@@ -91,10 +109,16 @@ lint: ## Check style and common mistakes (ruff)
 	$(UV) ruff check .
 	$(UV) ruff format --check .
 
-test: ## Run the unit tests
+test: ## Run the Python unit tests
 	$(UV) pytest
 
-ci: lint test ## Everything GitHub Actions runs
+test-java: ## Build the Flink jobs and run their tests
+	cd flink && ./mvnw -B verify
+
+ci: lint test test-java ## Everything GitHub Actions runs
 
 check-m1: .env | data/recordings ## The M1 checks (about 30 minutes; needs the live stack down)
 	$(UV_ENV) python -m ticklab.checks.m1
+
+check-m2: .env | data/recordings ## The M2 checks (about 3 hours; needs the live stack down)
+	$(UV_ENV) python -m ticklab.checks.m2

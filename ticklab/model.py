@@ -64,6 +64,7 @@ class Frame:
 
     trades: tuple[Trade, ...] = ()
     shutdown: bool = False  # the server announced it is about to close the connection
+    block_trade: bool = False  # Binance off-exchange block trade: recorded, not a trade
 
 
 def to_decimal(text: str) -> Decimal:
