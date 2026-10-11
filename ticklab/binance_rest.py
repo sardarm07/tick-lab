@@ -8,13 +8,31 @@ switches its `time` field to microseconds, the unit used everywhere else here.
 from __future__ import annotations
 
 import dataclasses
+import json
 import time
+from datetime import UTC, datetime
+from decimal import Decimal
 
 import httpx
 
 from ticklab import binance
+from ticklab.candles import Candle
 from ticklab.model import Source, Trade
 from ticklab.settings import Feed
+
+
+class RateLimited(RuntimeError):
+    """Binance answered 429 (too many requests) or 418 (banned for ignoring 429s)."""
+
+    def __init__(self, status: int, retry_after_s: float) -> None:
+        super().__init__(f"Binance rate limit ({status}): retry after {retry_after_s:.0f} s")
+        self.retry_after_s = retry_after_s
+
+
+def _check_rate_limit(response: httpx.Response) -> None:
+    if response.status_code in (418, 429):
+        # Retry-After is in seconds; without it, wait a minute (the weight window).
+        raise RateLimited(response.status_code, float(response.headers.get("Retry-After", 60)))
 
 
 def historical_trades(
@@ -25,8 +43,7 @@ def historical_trades(
         params={"symbol": feed.native, "fromId": from_id, "limit": limit},
         headers={"X-MBX-TIME-UNIT": "MICROSECOND"},
     )
-    if response.status_code in (418, 429):
-        raise RuntimeError(f"Binance rate limit ({response.status_code}); stop and wait")
+    _check_rate_limit(response)
     response.raise_for_status()
     trades = []
     for row in response.json():
@@ -80,7 +97,25 @@ def klines(client: httpx.Client, feed: Feed, start_ms: int, end_ms: int) -> tupl
             "limit": 1000,
         },
     )
-    if response.status_code in (418, 429):
-        raise RuntimeError(f"Binance rate limit ({response.status_code}); stop and wait")
+    _check_rate_limit(response)
     response.raise_for_status()
     return str(response.url), response.text
+
+
+def parse_klines(text: str) -> dict[datetime, Candle]:
+    """`klines` rows by minute: [open time, open, high, low, close, volume, close time, quote
+    volume, trades, taker buy volume, taker buy quote volume, ignore]."""
+    candles = {}
+    for row in json.loads(text):
+        candles[datetime.fromtimestamp(row[0] / 1000, UTC)] = Candle(
+            open=Decimal(row[1]),
+            high=Decimal(row[2]),
+            low=Decimal(row[3]),
+            close=Decimal(row[4]),
+            volume=Decimal(row[5]),
+            quote_volume=Decimal(row[7]),
+            trade_count=int(row[8]),
+            taker_buy_volume=Decimal(row[9]),
+            taker_buy_quote_volume=Decimal(row[10]),
+        )
+    return candles

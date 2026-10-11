@@ -1,0 +1,14 @@
+{
+ "name": "kraken-2026-10-11T0900-15m",
+ "exchange": "KRAKEN",
+ "source": "rest",
+ "start": "2026-10-11T09:00:00+00:00",
+ "minutes": 15,
+ "markets": {
+  "BTC/USD": 576,
+  "ETH/USD": 620,
+  "SOL/USD": 264,
+  "USDT/USD": 183
+ },
+ "candles": 60
+}

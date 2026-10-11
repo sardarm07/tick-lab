@@ -1,6 +1,7 @@
-"""The Binance producer: live trades to Kafka, and every raw frame to the recorder.
+"""The producers: live trades to Kafka, and every raw frame to the recorder.
 
-`record` mode runs the same feed without Kafka, so recordings can be made without the
+One process per exchange (Binance, Kraken), each with one WebSocket connection for all of its
+pairs. `record` mode runs the same feed without Kafka, so recordings can be made without the
 rest of the stack.
 """
 
@@ -9,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import signal
 import time
 from collections import Counter
@@ -16,7 +18,7 @@ from collections import Counter
 from prometheus_client import start_http_server
 from websockets.asyncio.client import ClientConnection
 
-from ticklab import binance, metrics
+from ticklab import binance, kraken, metrics
 from ticklab.kafka import TradePublisher
 from ticklab.model import Frame, Trade
 from ticklab.recorder import Recorder, session_name
@@ -29,9 +31,13 @@ log = logging.getLogger(__name__)
 class BinanceAdapter:
     exchange = binance.EXCHANGE
 
-    def __init__(self, ws_base: str, feeds: list[Feed]) -> None:
-        self._url = binance.stream_url(ws_base, feeds)
+    def __init__(self, settings: Settings, feeds: list[Feed]) -> None:
+        self._url = binance.stream_url(settings.binance_ws_url, feeds)
         self._feeds = {feed.native: feed for feed in feeds}
+        # Binance closes connections after 24 hours, and its streams send nothing while the
+        # markets are quiet.
+        self.max_age_s = settings.binance_max_connection_age_s
+        self.stale_after_s = settings.binance_stale_after_s
 
     def url(self) -> str:
         return self._url
@@ -43,11 +49,53 @@ class BinanceAdapter:
         return binance.parse_frame(raw, received_us, self._feeds, binance.time_scale(url))
 
 
-async def run_binance(settings: Settings, publish: bool) -> None:
-    feeds = feeds_for(binance.EXCHANGE)
-    publisher = TradePublisher(settings, client_id="producer-binance") if publish else None
+class KrakenAdapter:
+    """Kraken documents no limit on a connection's age, so connections aren't replaced on a
+    schedule. Liveness comes from its heartbeats: one a second when there is nothing else to
+    send, so a connection that delivers nothing for a few seconds is dead.
+
+    Kraken allows about 150 connection attempts per IP in any 10 minutes (more means a 10-minute
+    ban). The backoff keeps far below that: at most about 25 attempts in 10 minutes of
+    failures."""
+
+    exchange = kraken.EXCHANGE
+    max_age_s = math.inf
+
+    def __init__(self, settings: Settings, feeds: list[Feed]) -> None:
+        self._url = settings.kraken_ws_url
+        self._subscribe = kraken.subscribe_message(feeds)
+        self._feeds = {feed.native: feed for feed in feeds}
+        self.stale_after_s = settings.kraken_stale_after_s
+
+    def url(self) -> str:
+        return self._url
+
+    async def on_open(self, ws: ClientConnection) -> None:
+        """Subscribes with a snapshot: the last 50 trades of each pair, which overlap what an
+        earlier connection already delivered. A short reconnect leaves no hole (a 60 s network
+        cut in milestone 4 left none); gap repair fills longer ones."""
+        await ws.send(self._subscribe)
+
+    def parse(self, raw: str, received_us: int, url: str) -> Frame:
+        return kraken.parse_frame(raw, received_us, self._feeds)
+
+
+def adapter_for(
+    exchange: str, settings: Settings, feeds: list[Feed]
+) -> BinanceAdapter | KrakenAdapter:
+    if exchange == binance.EXCHANGE:
+        return BinanceAdapter(settings, feeds)
+    if exchange == kraken.EXCHANGE:
+        return KrakenAdapter(settings, feeds)
+    raise ValueError(f"no producer for {exchange}")
+
+
+async def run_feed(settings: Settings, exchange: str, publish: bool) -> None:
+    feeds = feeds_for(exchange)
+    client_id = f"producer-{exchange.lower()}"
+    publisher = TradePublisher(settings, client_id=client_id) if publish else None
     recorder = Recorder(
-        settings.recordings_dir, binance.EXCHANGE, session_name("live" if publish else "record")
+        settings.recordings_dir, exchange, session_name("live" if publish else "record")
     )
     counts: Counter[str] = Counter()
 
@@ -59,12 +107,13 @@ async def run_binance(settings: Settings, publish: bool) -> None:
             metrics.TRADES.labels(trade.exchange, trade.symbol).inc()
             metrics.LAST_TRADE_TIME.labels(trade.exchange, trade.symbol).set(trade.trade_time / 1e6)
 
+    adapter = adapter_for(exchange, settings, feeds)
     stream = LiveStream(
-        BinanceAdapter(settings.binance_ws_url, feeds),
+        adapter,
         on_trades,
         recorder,
-        max_age_s=settings.binance_max_connection_age_s,
-        stale_after_s=settings.stale_after_s,
+        max_age_s=adapter.max_age_s,
+        stale_after_s=adapter.stale_after_s,
     )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

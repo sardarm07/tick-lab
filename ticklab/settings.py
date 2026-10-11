@@ -71,9 +71,13 @@ class Settings:
     binance_rest_url: str
     binance_history_url: str
     binance_max_connection_age_s: float
-    stale_after_s: float
+    binance_stale_after_s: float
+    kraken_ws_url: str
+    kraken_rest_url: str
+    kraken_stale_after_s: float
     metrics_port: int
     stack: str
+    exchanges: tuple[str, ...]  # the exchanges this stack carries
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -92,7 +96,12 @@ class Settings:
             binance_history_url=env("BINANCE_HISTORY_URL", "https://data.binance.vision"),
             # Binance closes connections after 24 hours; replace them well before that.
             binance_max_connection_age_s=float(env("BINANCE_MAX_CONNECTION_AGE_S", "82800")),
-            stale_after_s=float(env("FEED_STALE_AFTER_S", "60")),
+            binance_stale_after_s=float(env("BINANCE_STALE_AFTER_S", "60")),
+            kraken_ws_url=env("KRAKEN_WS_URL", "wss://ws.kraken.com/v2"),
+            kraken_rest_url=env("KRAKEN_REST_URL", "https://api.kraken.com"),
+            # Kraken sends a heartbeat each second when there is nothing else to send.
+            kraken_stale_after_s=float(env("KRAKEN_STALE_AFTER_S", "10")),
             metrics_port=int(env("METRICS_PORT", "8000")),
             stack=env("TICKLAB_STACK", "live"),
+            exchanges=tuple(env("TICKLAB_EXCHANGES", "BINANCE,KRAKEN").split(",")),
         )

@@ -4,7 +4,6 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import org.apache.flink.connector.kafka.source.KafkaSource;
-import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
@@ -18,9 +17,9 @@ import ticklab.v1.Trade;
  * <p>Gaps in trade IDs go to {@code gaps} (gap repair fetches the missing trades), and feeds that
  * go quiet to {@code feed-health}.
  *
- * <p>Arguments: {@code --bootstrap host:port --registry url --silence feed=seconds,...}, where
- * a feed is {@code exchange:symbol}. Checkpointing and restarts come from the cluster's
- * configuration (compose.yaml).
+ * <p>Arguments: {@code --bootstrap host:port --registry url --partitions 0,1,2
+ * --idleness-seconds 10 --silence feed=seconds,...}, where a feed is {@code exchange:symbol}.
+ * Checkpointing and restarts come from the cluster's configuration (compose.yaml).
  */
 public final class CoreJob {
     private CoreJob() {}
@@ -29,22 +28,18 @@ public final class CoreJob {
         Map<String, String> options = parse(args);
         String bootstrap = options.getOrDefault("bootstrap", "redpanda:9092");
         String registry = options.getOrDefault("registry", "http://redpanda:8081");
-        Duration idleness = Duration.ofSeconds(Long.parseLong(
-                options.getOrDefault("idleness-seconds", String.valueOf(CorePipeline.IDLENESS.toSeconds()))));
+        Duration idleness = idleness(options);
         Map<String, Integer> silence = thresholds(options.getOrDefault("silence", ""));
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        KafkaSource<TradeEvent> source = KafkaSource.<TradeEvent>builder()
-                .setBootstrapServers(bootstrap)
-                .setTopics("trades")
-                .setGroupId("flink-core")
-                // After a restart without state, continue where the group left off.
-                .setStartingOffsets(OffsetsInitializer.committedOffsets(OffsetResetStrategy.EARLIEST))
-                .setDeserializer(new TradeDeserializer(registry))
-                .build();
+        // Only the partitions of the feeds this stack carries (all of them by default).
+        KafkaSource<TradeEvent> source = Sources.trades(bootstrap, registry,
+                options.get("partitions"), "flink-core", OffsetResetStrategy.EARLIEST);
         // Watermarks are generated per partition (per feed) inside the source.
         DataStream<TradeEvent> trades = env.fromSource(
-                        source, CorePipeline.watermarks(CorePipeline.WATERMARK_BOUND, idleness), "trades")
+                        source,
+                        CorePipeline.watermarks(CorePipeline.WATERMARK_BOUND, idleness),
+                        "trades")
                 .uid("trades-source");
 
         CorePipeline.Streams streams = CorePipeline.build(
@@ -74,6 +69,12 @@ public final class CoreJob {
                 .name("feed-health-sink")
                 .uid("feed-health-sink");
         env.execute("ticklab-core");
+    }
+
+    /** {@code --idleness-seconds}: 10 s by default (live data); 0 turns idleness off. */
+    static Duration idleness(Map<String, String> options) {
+        return Duration.ofSeconds(Long.parseLong(options.getOrDefault(
+                "idleness-seconds", String.valueOf(CorePipeline.IDLENESS.toSeconds()))));
     }
 
     /** {@code BINANCE:BTC/USDT=30,BINANCE:ETH/USDT=75} into a map. */

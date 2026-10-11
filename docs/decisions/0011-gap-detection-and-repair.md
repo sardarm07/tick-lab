@@ -21,7 +21,8 @@ really missing rather than reordered, and how do repaired trades reach the candl
   from Flink, REPAIRED and FAILED from gap repair. ClickHouse keeps one row per status, so repair
   times can be measured.
 - **Rate limits:** at most 600 of Binance's 6,000 request weight per minute; on 429 or 418 the
-  repair stops and the gap is reported FAILED rather than retried blindly.
+  repair stops and the gap is reported FAILED rather than retried blindly, and no Binance request
+  is sent until the response's `Retry-After` has passed (milestone 4). Kraken: decision 0016.
 
 ## Consequences
 

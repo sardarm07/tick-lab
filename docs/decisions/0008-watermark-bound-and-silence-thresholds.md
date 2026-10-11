@@ -20,8 +20,10 @@ From `docs/data-study.md`:
 - **B = 2 s** for the core job. Live Binance data showed no disorder at all (0 late trades in
   65,360). The margin covers connection handovers and replays. The analyses keep B = 10 s.
 - **Silence thresholds:** twice the longest gap seen in a week of history, rounded up to 15 s,
-  at least 30 s. That gives BTC/USDT 30 s, ETH/USDT 75 s and SOL/USDT 45 s. Kraken's pairs get
-  theirs from their own data in milestone 4.
+  at least 30 s. That gives BTC/USDT 30 s, ETH/USDT 75 s and SOL/USDT 45 s.
+- **Kraken (milestone 4):** its live trades showed no disorder either (0 late in 10,606), so B
+  stays 2 s. By the same rule, its silence thresholds are BTC/USD 105 s, ETH/USD and SOL/USD
+  135 s, and USDT/USD 210 s: Kraken trades about a twentieth as often as Binance.
 
 ## Consequences
 

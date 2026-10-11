@@ -1,0 +1,381 @@
+{
+  "uid": "ticklab-market",
+  "title": "Market",
+  "tags": [
+    "ticklab"
+  ],
+  "description": "Both exchanges side by side: candles, the spread between them, and alerts.",
+  "timezone": "utc",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": false,
+  "refresh": "10s",
+  "time": {
+    "from": "now-2h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "base",
+        "label": "Asset",
+        "type": "custom",
+        "query": "BTC,ETH,SOL",
+        "current": {
+          "text": "BTC",
+          "value": "BTC"
+        },
+        "options": [
+          {
+            "text": "BTC",
+            "value": "BTC",
+            "selected": true
+          },
+          {
+            "text": "ETH",
+            "value": "ETH",
+            "selected": false
+          },
+          {
+            "text": "SOL",
+            "value": "SOL",
+            "selected": false
+          }
+        ],
+        "multi": false,
+        "includeAll": false
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Alerts",
+        "enable": true,
+        "iconColor": "orange",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "clickhouse"
+        },
+        "target": {
+          "refId": "Anno",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "annotations",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT opened_at AS time, at AS timeEnd,\n       concat(toString(type), ' ', key, ': ', explanation) AS text,\n       [toString(type), toString(status)] AS tags\nFROM ticklab.alerts FINAL\nWHERE $__timeFilter(opened_at)"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "candlestick",
+      "title": "Binance ${base}/USDT",
+      "description": "1-minute candles from the core job (latest version of each).",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "mode": "candles+volume",
+        "candleStyle": "candles",
+        "colorStrategy": "open-close",
+        "includeAllFields": false,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT minute AS time, open, high, low, close, volume\nFROM ticklab.candles FINAL\nWHERE exchange = 'BINANCE' AND symbol = '${base}/USDT' AND $__timeFilter(minute)\nORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "candlestick",
+      "title": "Kraken ${base}/USD",
+      "description": "1-minute candles from the core job (latest version of each).",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "mode": "candles+volume",
+        "candleStyle": "candles",
+        "colorStrategy": "open-close",
+        "includeAllFields": false,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT minute AS time, open, high, low, close, volume\nFROM ticklab.candles FINAL\nWHERE exchange = 'KRAKEN' AND symbol = '${base}/USD' AND $__timeFilter(minute)\nORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Spread, Kraken in USDT minus Binance",
+      "description": "Per second, in basis points (1 bp = 0.01%): positive when Kraken, converted with Kraken's USDT/USD price at the time, is dearer. Averaged over the panel's interval, with the widest second.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "custom": {
+            "fillOpacity": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT $__timeInterval(second) AS time,\n       avg(toFloat64(spread_bps)) AS `average bps`,\n       argMax(toFloat64(spread_bps), abs(spread_bps)) AS `widest second, bps`\nFROM ticklab.spread_1s FINAL\nWHERE base = '${base}' AND $__timeFilter(second)\nGROUP BY time ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "|Spread| over the range",
+      "description": "Median and 99th percentile of the per-second |spread|, in bps.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT quantileExact(0.5)(abs(toFloat64(spread_bps))) AS median,\n       quantileExact(0.99)(abs(toFloat64(spread_bps))) AS p99\nFROM ticklab.spread_1s FINAL\nWHERE base = '${base}' AND $__timeFilter(second)"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Latest second",
+      "description": "The newest spread, and how old Kraken's price was in it (stale prices over 10 s give no spread).",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT toFloat64(argMax(spread_bps, second)) AS `spread, bps`,\n       argMax(kraken_age_ms, second) / 1000 AS `Kraken price age, s`\nFROM ticklab.spread_1s FINAL WHERE base = '${base}'"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Alerts",
+      "description": "Newest first. A closed alert's text says how it opened and how it ended.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "explanation"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 900
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT opened_at, type, key, status, at AS updated_at,\n       round(value, 2) AS value, round(peak, 2) AS peak, explanation\nFROM ticklab.alerts FINAL\nWHERE $__timeFilter(opened_at)\nORDER BY opened_at DESC LIMIT 200"
+        }
+      ]
+    }
+  ]
+}

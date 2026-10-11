@@ -6,6 +6,7 @@ services:
   gap-repair:
     environment:
       BINANCE_REST_URL: http://fake-exchange:8090
+      KRAKEN_REST_URL: http://fake-exchange:8090
       # The real exchange limits request weight; the fake one doesn't need protecting.
       GAP_REPAIR_WEIGHT_PER_MINUTE: "1000000"
     extra_hosts:
@@ -13,5 +14,7 @@ services:
       - "data-api.binance.vision:127.0.0.1"
       - "data.binance.vision:127.0.0.1"
       - "stream.binance.com:127.0.0.1"
+      - "api.kraken.com:127.0.0.1"
+      - "ws.kraken.com:127.0.0.1"
     depends_on:
       fake-exchange: {condition: service_healthy}

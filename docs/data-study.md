@@ -1,7 +1,8 @@
-# Data study (milestone 1)
+# Data study
 
-Two numbers later milestones depend on, measured rather than guessed. Both come from
-`ticklab/study.py`; the commands below reproduce them.
+Numbers the pipeline depends on, measured rather than guessed. They come from
+`ticklab/study.py` and `ticklab/signal_study.py`; the commands below reproduce them. Milestone 1
+measured Binance; milestone 4 added Kraken and the signals.
 
 ## Arrival disorder, from live recordings
 
@@ -80,4 +81,99 @@ The producer replaces a connection after 60 s without any frame. Its one stream 
 three pairs, so it only goes quiet when all three do at once, and BTC/USDT alone never paused
 for even 10 s this week.
 
-Kraken's markets trade far less often and get their own study in milestone 4.
+Kraken's markets trade far less often; see below.
+
+## Kraken: gaps between trades, from a week of history (milestone 4)
+
+`make kraken-history FROM=2026-10-04T00:00 TO=2026-10-11T00:00` fetched the week from Kraken's
+`Trades` endpoint: 1,755 requests, 1.75 million trades, every pair's trade IDs contiguous.
+`make study-gaps FROM=2026-10-04 TO=2026-10-10 EXCHANGE=kraken` then measures them like
+Binance's:
+
+| Feed | Trades | ID breaks | p50 | p99 | p99.9 | p99.99 | Longest (ms) | Ended at (UTC) | Gaps ≥ 10 s | ≥ 30 s | ≥ 60 s |
+|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|
+| BTC/USD | 849,526 | 0 | 2 | 7,991 | 15,262 | 24,242 | 46,994 | 2026-10-06 05:27:36 | 4,224 | 32 | 0 |
+| ETH/USD | 345,560 | 0 | 216 | 16,100 | 29,015 | 46,042 | 66,928 | 2026-10-10 04:04:13 | 11,905 | 290 | 5 |
+| SOL/USD | 252,104 | 0 | 889 | 17,353 | 29,069 | 42,305 | 62,833 | 2026-10-05 05:17:49 | 12,140 | 215 | 2 |
+| USDT/USD | 304,413 | 0 | 41 | 22,753 | 42,908 | 64,001 | 102,954 | 2026-10-04 08:55:24 | 17,349 | 1,313 | 48 |
+
+Kraken has about a twentieth of Binance's trades, and its quiet spells run to a minute or
+more. USDT/USD is the most uneven: often quiet, but its busiest hour (2026-10-07 21:00, 16,378
+trades) came close to BTC/USD's (17,786).
+
+**Silence thresholds**, by the milestone 1 rule (twice the longest gap, rounded up to 15 s):
+
+| Feed | Longest gap | Threshold |
+|---|---:|---:|
+| BTC/USD | 47.0 s | 105 s |
+| ETH/USD | 66.9 s | 135 s |
+| SOL/USD | 62.8 s | 135 s |
+| USDT/USD | 103.0 s | 210 s |
+
+The Kraken producer doesn't depend on trades to know its connection is alive: Kraken sends a
+heartbeat every second when there is nothing else (decision note 0016).
+
+## Kraken: arrival disorder, from live recordings (milestone 4)
+
+`make study-disorder FROM=2026-10-11T11:22 TO=2026-10-11T13:22 EXCHANGES=KRAKEN`, over the live
+window of the milestone 4 check, which included a producer restart and a 60 s network cut:
+
+| Feed | Trades | Repeats | Missing IDs | IDs out of order | Late | Received − trade time p50 / p99 / max (ms) |
+|---|---:|---:|---:|---:|---:|---|
+| BTC/USD | 5,374 | 80 | 0 | 0 | 0 | 302 / 372 / 52,951 |
+| ETH/USD | 1,877 | 87 | 0 | 0 | 0 | 309 / 405 / 62,685 |
+| SOL/USD | 1,701 | 93 | 0 | 0 | 0 | 310 / 369 / 61,423 |
+| USDT/USD | 1,654 | 86 | 0 | 0 | 0 | 318 / 395 / 56,081 |
+
+- **No disorder,** as on Binance, so the watermark bound B = 2 s holds for Kraken too.
+- **The repeats are the snapshots** each new subscription starts with: the last 50 trades of
+  each pair, most of them already received. The longest delays (up to 63 s) are snapshot trades
+  delivered after the network cut, which is also why no trade went missing.
+- Kraken's trades arrive about 0.3 s after their own timestamps, Binance's about 0.13 s. Both
+  include the offset between the exchange's clock and ours.
+
+## Signals: spreads, moves and volumes, from a week of both exchanges (milestone 4)
+
+`make study-signals FROM=2026-10-04 TO=2026-10-10` reads Binance's daily files and the Kraken
+history together, merged by trade time, and applies the signals job's definitions in plain
+Python (`ticklab/signal_study.py`): 1-second bars, Kraken converted to USDT at the USDT/USD price
+of its own second, each Binance second compared with the newest Kraken price unless it is more
+than 10 s old, and 1-minute bars. About 6 minutes for the week.
+
+| Base | Seconds compared | Share of Binance seconds | p50 | p90 | p99 | p99.9 | Max |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| BTC | 532,142 | 98.3% | 0.49 | 1.18 | 1.96 | 3.18 | 34.06 |
+| ETH | 392,992 | 92.9% | 0.67 | 1.72 | 3.32 | 6.03 | 59.31 |
+| SOL | 330,022 | 93.1% | 0.89 | 2.30 | 4.84 | 7.93 | 45.60 |
+
+|spread| in basis points (1 bp = 0.01%), positive or negative.
+
+Divergence alerts a day, opening above each value held for 10 s or 30 s and closing below half
+of it held as long:
+
+| Base, hold | 1.5 bps | 2 bps | 2.5 bps | 3 bps | 4 bps | 5 bps |
+|---|---:|---:|---:|---:|---:|---:|
+| BTC, 10 s | 37.3 | 6.7 | 1.9 | 0.3 | 0.1 | 0.0 |
+| ETH, 10 s | 96.7 | 27.6 | 5.4 | 1.6 | 0.4 | 0.0 |
+| SOL, 10 s | 72.4 | 35.7 | 13.3 | 5.3 | 1.4 | 0.4 |
+| BTC, 30 s | 8.3 | 1.1 | 0.1 | 0.0 | 0.0 | 0.0 |
+| ETH, 30 s | 8.1 | 1.0 | 0.7 | 0.3 | 0.0 | 0.0 |
+| SOL, 30 s | 2.1 | 1.0 | 0.3 | 0.1 | 0.0 | 0.0 |
+
+Minutes a day whose |z| (the minute's log return over the root mean square of the past hour's
+one-minute returns) reaches each value, and whose volume reaches each multiple of the past
+hour's average minute (minutes without trades count as zero):
+
+| Feed | z ≥ 5 | z ≥ 6 | z ≥ 8 | z ≥ 10 | z ≥ 12 | vol ≥ 8x | vol ≥ 10x | vol ≥ 15x | vol ≥ 20x | vol ≥ 30x | vol ≥ 50x |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| BINANCE:BTC/USDT | 4.9 | 2.3 | 0.4 | 0.0 | 0.0 | 11.4 | 8.4 | 3.1 | 2.0 | 0.3 | 0.1 |
+| BINANCE:ETH/USDT | 3.6 | 2.1 | 1.1 | 0.7 | 0.1 | 11.7 | 8.1 | 4.4 | 2.7 | 1.1 | 0.0 |
+| BINANCE:SOL/USDT | 3.1 | 1.4 | 0.7 | 0.1 | 0.1 | 9.0 | 6.3 | 1.9 | 1.3 | 0.4 | 0.0 |
+| KRAKEN:BTC/USD | 4.1 | 2.3 | 0.4 | 0.0 | 0.0 | 30.4 | 20.4 | 10.0 | 6.1 | 3.1 | 0.7 |
+| KRAKEN:ETH/USD | 4.6 | 2.4 | 1.0 | 0.7 | 0.3 | 40.1 | 29.6 | 15.7 | 10.4 | 5.4 | 2.9 |
+| KRAKEN:SOL/USD | 2.9 | 1.4 | 0.6 | 0.1 | 0.1 | 35.9 | 25.9 | 15.9 | 10.4 | 6.0 | 2.9 |
+
+The alert thresholds chosen from these tables, and why, are in decision note 0018: divergence
+above 2 bps for 30 s, moves of 8 times the typical one, and volume spikes of 20 times on
+Binance and 50 times on Kraken.
+

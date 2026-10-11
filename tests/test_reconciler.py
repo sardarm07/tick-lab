@@ -2,7 +2,9 @@ import json
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from ticklab.reconciler import Candle, Result, compare, parse_binance_klines, summary
+from ticklab.binance_rest import parse_klines as parse_binance_klines
+from ticklab.candles import Candle, compare
+from ticklab.reconciler import Result, summary
 from ticklab.settings import Feed
 
 BTC = Feed("BINANCE", "BTC/USDT", "BTCUSDT", 0)

@@ -20,9 +20,14 @@ shouldn't create gaps at all.
   the replacement retried with backoff.
 - On errors, reconnects with exponential backoff (1 s doubling to 60 s) with "equal jitter":
   half of each delay is random.
-- Replaces a connection that has delivered nothing for 60 s (`FEED_STALE_AFTER_S`). The data
+- Replaces a connection that has delivered nothing for 60 s (`BINANCE_STALE_AFTER_S`). The data
   study shows that no pair goes 60 s without a trade, and the combined stream carries three
   pairs.
+- Kraken (from milestone 4) documents no limit on a connection's age, so its connections aren't
+  replaced on a schedule. It sends a heartbeat each second when there is nothing else to send,
+  so a Kraken connection that delivers nothing for 10 s (`KRAKEN_STALE_AFTER_S`) is replaced.
+  Each new subscription starts with a snapshot of the last 50 trades of each pair, which
+  overlaps what the previous connection delivered.
 
 ## Consequences
 

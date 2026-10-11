@@ -6,9 +6,13 @@ them to `trades` with source REST. They arrive late, but within the candles' lat
 the affected candles are emitted again, complete. Then it reports the gap REPAIRED, or FAILED,
 on the `gaps` topic under the same key.
 
-Binance allows 6,000 request weight a minute per IP and `historicalTrades` costs 25. Gap repair
-spends at most 600 a minute (24 requests) by default (GAP_REPAIR_WEIGHT_PER_MINUTE), and on 429
-or 418 stops and waits. Against the fake exchange, tests lift the budget.
+- Binance: `historicalTrades` from an ID. Binance allows 6,000 request weight a minute per IP
+  and the endpoint costs 25. Gap repair spends at most 600 a minute (24 requests) by default
+  (GAP_REPAIR_WEIGHT_PER_MINUTE). On 429 or 418 it sends no more Binance requests until the
+  response's Retry-After has passed; gaps detected meanwhile fail. Against the fake exchange,
+  tests lift the budget.
+- Kraken: `Trades` pages from a time, not an ID. The time comes from the trade just before the
+  gap, which is already stored in ClickHouse. At most one request a second.
 """
 
 from __future__ import annotations
@@ -25,8 +29,10 @@ import httpx
 from confluent_kafka import Consumer, Producer
 from prometheus_client import Counter, Histogram
 
-from ticklab import avro, binance, binance_rest
+from ticklab import avro, binance_rest, kraken, kraken_rest
+from ticklab.clickhouse import ClickHouse
 from ticklab.kafka import TradePublisher
+from ticklab.model import Trade
 from ticklab.settings import Feed, Settings
 from ticklab.stream import now_us
 
@@ -34,6 +40,7 @@ log = logging.getLogger(__name__)
 
 WEIGHT_PER_MINUTE = 600
 HISTORICAL_TRADES_WEIGHT = 25
+KRAKEN_REQUEST_INTERVAL_S = 1.0
 
 GAPS = Counter("ticklab_gap_repair_gaps", "Gaps handled, by outcome", ["symbol", "outcome"])
 FETCHED = Counter("ticklab_gap_repair_trades", "Missing trades fetched and published", ["symbol"])
@@ -70,6 +77,9 @@ class GapRepair:
         self._client = httpx.Client(timeout=30)
         budget = int(os.environ.get("GAP_REPAIR_WEIGHT_PER_MINUTE", WEIGHT_PER_MINUTE))
         self._limiter = WeightLimiter(budget)
+        self._binance_blocked_until = 0.0  # monotonic time; set by 429 and 418 answers
+        self._kraken_next_request = 0.0  # monotonic time
+        self._clickhouse = ClickHouse(settings)
         self._trades = TradePublisher(settings, client_id="gap-repair")
         self._status = Producer(
             {
@@ -105,27 +115,16 @@ class GapRepair:
     def repair(self, gap: dict) -> None:
         feed = self._feeds.get((gap["exchange"], gap["symbol"]))
         first, last = gap["first_missing_id"], gap["last_missing_id"]
-        if feed is None or feed.exchange != binance.EXCHANGE:
+        if feed is None:
             log.warning("no repair source for %s %s", gap["exchange"], gap["symbol"])
             return
         wanted = last - first + 1
         log.info("%s: fetching %d missing trades %d..%d", feed.symbol, wanted, first, last)
         try:
-            found = []
-            next_id = first
-            while next_id <= last:
-                self._limiter.spend(HISTORICAL_TRADES_WEIGHT)
-                page = binance_rest.historical_trades(
-                    self._client,
-                    self._settings.binance_rest_url,
-                    feed,
-                    next_id,
-                    min(1000, last - next_id + 1),
-                )
-                if not page:
-                    break
-                found += [t for t in page if t.trade_id <= last]
-                next_id = page[-1].trade_id + 1
+            if feed.exchange == kraken.EXCHANGE:
+                found = self._fetch_kraken(feed, first, last)
+            else:
+                found = self._fetch_binance(feed, first, last)
         except (httpx.HTTPError, RuntimeError) as exc:
             log.warning("%s: repair of %d..%d failed: %r", feed.symbol, first, last, exc)
             GAPS.labels(feed.symbol, "failed").inc()
@@ -142,6 +141,72 @@ class GapRepair:
         GAPS.labels(feed.symbol, outcome.lower()).inc()
         self._report(gap, outcome, len(found), f"{len(found)} of {wanted} trades found")
         log.info("%s: %d..%d %s (%d of %d)", feed.symbol, first, last, outcome, len(found), wanted)
+
+    def _fetch_binance(self, feed: Feed, first: int, last: int) -> list[Trade]:
+        wait = self._binance_blocked_until - time.monotonic()
+        if wait > 0:
+            raise RuntimeError(f"Binance rate limit: no requests for another {wait:.0f} s")
+        found: list[Trade] = []
+        next_id = first
+        while next_id <= last:
+            self._limiter.spend(HISTORICAL_TRADES_WEIGHT)
+            try:
+                page = binance_rest.historical_trades(
+                    self._client,
+                    self._settings.binance_rest_url,
+                    feed,
+                    next_id,
+                    min(1000, last - next_id + 1),
+                )
+            except binance_rest.RateLimited as exc:
+                self._binance_blocked_until = time.monotonic() + exc.retry_after_s
+                raise
+            if not page:
+                break
+            found += [t for t in page if t.trade_id <= last]
+            next_id = page[-1].trade_id + 1
+        return found
+
+    def _fetch_kraken(self, feed: Feed, first: int, last: int) -> list[Trade]:
+        """Kraken pages trades by time: start at the trade before the gap and page forward.
+
+        `since` is in nanoseconds. Stored times are microseconds: from the WebSocket, Kraken's
+        own nanosecond times truncated; from REST, possibly 1 µs off, since REST sends times as
+        binary floating-point seconds. Starting 1 µs before the stored time covers both.
+        """
+        since = (self._time_before(feed, first) - 1) * 1000
+        return kraken_rest.trades_between_ids(
+            self._client, self._settings.kraken_rest_url, feed, since, first, last, self._pace
+        )
+
+    def _pace(self) -> None:
+        """At most one Kraken request a second."""
+        pause = self._kraken_next_request - time.monotonic()
+        if pause > 0:
+            time.sleep(pause)
+        self._kraken_next_request = time.monotonic() + KRAKEN_REQUEST_INTERVAL_S
+
+    def _time_before(self, feed: Feed, first: int, tries: int = 30) -> int:
+        """Trade time, in microseconds, of the newest stored trade before ID `first`.
+
+        ClickHouse reads `trades` on its own, in blocks a few seconds apart, and may not have
+        stored that trade yet when the gap is reported, so the lookup is retried every second
+        for half a minute."""
+        for attempt in range(tries):
+            rows = self._clickhouse.rows(
+                """SELECT toUnixTimestamp64Micro(trade_time) AS t FROM ticklab.trades
+                WHERE exchange = {exchange:String} AND symbol = {symbol:String}
+                  AND trade_id < {first:Int64}
+                ORDER BY trade_id DESC LIMIT 1""",
+                exchange=feed.exchange,
+                symbol=feed.symbol,
+                first=first,
+            )
+            if rows:
+                return int(rows[0]["t"])
+            if attempt < tries - 1:
+                time.sleep(1)
+        raise RuntimeError(f"no stored trade before ID {first}, so no time to start from")
 
     def _report(self, gap: dict, status: str, found: int, detail: str) -> None:
         schema_id, schema = self._registry.latest("gaps-value")

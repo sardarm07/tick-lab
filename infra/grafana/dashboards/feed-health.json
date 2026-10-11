@@ -151,8 +151,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(changes(process_start_time_seconds{job=\"producer-binance\"}[$__rate_interval]))",
-          "legendFormat": "producer restarts"
+          "expr": "sum by (job) (changes(process_start_time_seconds{job=~\"producer-.*\"}[$__rate_interval]))",
+          "legendFormat": "restarts: {{job}}"
         }
       ],
       "options": {

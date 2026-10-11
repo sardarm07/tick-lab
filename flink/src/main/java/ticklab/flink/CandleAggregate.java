@@ -18,7 +18,8 @@ public class CandleAggregate
 
     @Override
     public CandleAccumulator add(TradeEvent trade, CandleAccumulator candle) {
-        BigDecimal notional = Decimals.exact(trade.price.multiply(trade.quantity));
+        // Exact: sums keep every decimal place until the candle is written (Decimals.notional).
+        BigDecimal notional = trade.price.multiply(trade.quantity);
         candle.count++;
         if (trade.tradeId < candle.firstTradeId) {
             candle.firstTradeId = trade.tradeId;

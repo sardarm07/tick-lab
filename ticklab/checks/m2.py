@@ -32,7 +32,7 @@ from ticklab.checks.common import (
 )
 from ticklab.checks.m1 import latest_published_day
 from ticklab.clickhouse import ClickHouse
-from ticklab.reconciler import Reconciler, binance_feeds, summary
+from ticklab.reconciler import Reconciler, summary
 from ticklab.settings import ROOT, Feed, Settings, feeds_for
 
 LIVE_MINUTES = 120
@@ -54,7 +54,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     settings = Settings.from_env()
-    feeds = binance_feeds(feeds_for(binance.EXCHANGE))
+    feeds = feeds_for(binance.EXCHANGE)
     clickhouse = ClickHouse(settings)
     report = Report("M2")
     say(f"# M2 check, started {stamp()} UTC\n\ndisk: {disk_line()}\n")

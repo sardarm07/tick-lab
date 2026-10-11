@@ -1,9 +1,10 @@
 """The end-to-end test: a fixture replayed with chaos, then drained, then checked exactly.
 
 It runs against a stack whose gap repair talks to the fake exchange serving the same fixture:
-the `ticklab-ci` stack in CI (`make e2e`) or the replay stack (`make chaos`). It passes only if
+the `ticklab-ci` stack in CI (`make e2e`) or the replay stack (`make chaos`). The fixture is of
+one exchange, Binance or Kraken. It passes only if
 
-1. every candle equals Binance's official one in every field;
+1. every candle equals the exchange's official one in every field it publishes;
 2. every dropped range was reported as a gap and repaired;
 3. no trade ended up in late-trades, since everything was injected within the lateness budget;
 4. Flink's deduplication dropped at least as many repeats as were injected.
@@ -12,22 +13,21 @@ the `ticklab-ci` stack in CI (`make e2e`) or the replay stack (`make chaos`). It
 from __future__ import annotations
 
 import time
-from datetime import UTC, datetime
-from decimal import Decimal
 
-from ticklab import binance, chaos, replay
+from ticklab import chaos, replay
+from ticklab.candles import compare
 from ticklab.checks.common import Report, say, stamp
 from ticklab.clickhouse import ClickHouse
-from ticklab.fixture import load
-from ticklab.flinkctl import Flink
+from ticklab.fixture import Fixture, load
+from ticklab.flinkctl import JOBS, Flink
 from ticklab.kafka import TradePublisher
-from ticklab.reconciler import Candle, compare, our_candles
+from ticklab.reconciler import our_candles
 from ticklab.settings import Settings, feeds_for
 
 
 def run(settings: Settings, fixture_name: str, seed: int, speed: float) -> int:
     fixture = load(fixture_name)
-    feeds = {feed.native: feed for feed in feeds_for(binance.EXCHANGE)}
+    feeds = {feed.native: feed for feed in feeds_for(fixture.exchange)}
     clickhouse = ClickHouse(settings)
     stack = clickhouse.value("SELECT any(name) FROM ticklab.stack")
     if stack not in ("ci", "replay"):
@@ -46,8 +46,14 @@ def run(settings: Settings, fixture_name: str, seed: int, speed: float) -> int:
     say(f"[{stamp()}] replayed {result.trades:,} in {result.seconds:.0f}s")
     settle(clickhouse)
     flink = Flink(stack=stack)
-    duplicates = flink.operator_counter("duplicates")
-    flink.stop(drain=True)
+    # Flink's REST API refreshes metrics every 10 s, so the first reading can lag behind.
+    deadline = time.monotonic() + 60
+    while (duplicates := flink.operator_counter("duplicates")) < injected.duplicates:
+        if time.monotonic() > deadline:
+            break
+        time.sleep(5)
+    for job in JOBS:
+        flink.stop(job, drain=True)
     settle(clickhouse, quiet_s=20)
 
     check_candles(report, clickhouse, fixture, feeds)
@@ -84,31 +90,18 @@ def settle(clickhouse: ClickHouse, quiet_s: float = 30, timeout_s: float = 900) 
     say("settle: timed out")
 
 
-def check_candles(report: Report, clickhouse: ClickHouse, fixture, feeds: dict) -> None:
+def check_candles(report: Report, clickhouse: ClickHouse, fixture: Fixture, feeds: dict) -> None:
     compared = mismatched = 0
-    for native, rows in fixture.klines_by_market().items():
-        feed = feeds[native]
-        minutes = [datetime.fromtimestamp(int(k[0]) / 1000, UTC) for k in rows]
-        ours = our_candles(clickhouse, feed, minutes[0], minutes[-1])
-        for minute, k in zip(minutes, rows, strict=True):
-            theirs = Candle(
-                open=Decimal(k[1]),
-                high=Decimal(k[2]),
-                low=Decimal(k[3]),
-                close=Decimal(k[4]),
-                volume=Decimal(k[5]),
-                quote_volume=Decimal(k[7]),
-                trade_count=int(k[8]),
-                taker_buy_volume=Decimal(k[9]),
-                taker_buy_quote_volume=Decimal(k[10]),
-            )
+    for feed, official in fixture.official(feeds).items():
+        ours = our_candles(clickhouse, feed, min(official), max(official))
+        for minute, theirs in sorted(official.items()):
             differences = compare(ours.get(minute), theirs)
             compared += 1
             if differences:
                 mismatched += 1
                 say(f"- {feed.symbol} {minute:%H:%M}: {'; '.join(differences)}")
     report.record(
-        "1. every candle equals Binance's official one",
+        f"1. every candle equals {fixture.exchange.title()}'s official one",
         mismatched == 0 and compared > 0,
         f"({compared - mismatched} of {compared} candles)",
     )

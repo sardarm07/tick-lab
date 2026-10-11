@@ -164,5 +164,5 @@ def gaps_report(feeds: dict[str, Gaps], first: date, last: date) -> str:
     for g in feeds.values():
         totals.update(g.per_hour)
     top = ", ".join(f"{hour:%Y-%m-%d %H}:00 {n:,}" for hour, n in totals.most_common(3))
-    lines += [f"| all three | {top} |"]
+    lines += [f"| all | {top} |"]
     return "\n".join(lines)

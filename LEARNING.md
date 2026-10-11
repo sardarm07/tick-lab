@@ -252,3 +252,98 @@ still exact: every candle equal to the exchange's (`ticklab/checks/e2e.py`).
 The fake exchange (`ticklab/fake_exchange.py`) plays the fixture's trades and candles as
 Binance's REST API, so gap repair and the checks run unchanged, and CI never touches a real
 exchange.
+
+## Milestone 4: a second exchange, and signals across both
+
+### Knowing what a timestamp means
+
+Kraken keeps each trade's time in nanoseconds. Its WebSocket truncates that to microseconds;
+its REST API sends it as a binary floating-point number of seconds, which can't hold every
+nanosecond time and lands up to about 0.12 µs either side of it. So the same trade can carry two
+different microsecond times, depending on where it came from: 7 of 50 did in one check. None of
+the results depend on it (candles order trades by ID), but it was only found by asking Kraken
+for a trade's exact time and comparing (decision note 0016). An exchange's documentation says
+what a field is called, not always what it means.
+
+### Paging by time instead of by ID
+
+Binance can return trades from an ID, so repairing a gap is a lookup. Kraken pages by time:
+"trades since t". Gap repair therefore turns the gap into a time, from the trade just before it
+that is already in ClickHouse, and pages forward until it is past the gap. `since` is
+inclusive, so consecutive pages share a trade; collecting trades by ID makes the overlap
+harmless (`kraken_rest.trades_between_ids`).
+
+### Flink SQL on a stream
+
+The signals job hands deduplicated trades to Flink SQL as a table whose event time and
+watermarks come from the stream (`SignalsPipeline.java`). A tumbling window then reads like
+ordinary SQL: `TUMBLE(TABLE trades, DESCRIPTOR(rowtime), INTERVAL '1' SECOND)`, grouped by feed.
+Each window's row comes out once, when the watermark passes its end. A trade later than that is
+dropped from the window: these bars are a live signal, while the candles accept late trades.
+
+SQL's `LAST_VALUE` means the last row to arrive, not the last trade. The last trade is the one
+with the highest ID, so the job defines its own aggregate, `LAST_BY_ID(price, trade_id)`
+(`LastPriceById.java`).
+
+The window aggregation runs differently from the DataStream windows: it buffers rows in Flink's
+*managed memory*, off the Java heap. The core job never used any, so the cluster had none
+configured, and the signals job's first window failed until it got 64 MB (decision note 0010).
+
+### Versioned tables and temporal joins
+
+A price is only meaningful at a moment. To convert a Kraken BTC/USD price to USDT, the job needs
+the USDT/USD rate *as it was when that Kraken price was set*, not the latest rate. Flink SQL says
+this directly:
+
+```sql
+JOIN usd_per_usdt FOR SYSTEM_TIME AS OF k.bar_time AS r ON k.`quote` = r.`quote`
+```
+
+`usd_per_usdt` is a *versioned table*: every past rate, each valid from its own time until the
+next. Deduplicating a stream on the newest time per key is how Flink SQL declares one. An
+*event-time temporal join* waits until the watermark passes each Kraken row, then joins it with
+the version of the rate valid at that row's time. The result doesn't depend on when rows arrive,
+only on their times. A second temporal join gives each Binance second the Kraken price as of
+that second.
+
+One rule took a failed test to find: a row may carry only one event-time attribute. A temporal
+join keeps the time columns of both sides as event time, so the joined rows had two, and Flink
+could no longer tell which one versioned the next table. Casting the version's time to a plain
+`TIMESTAMP` leaves the Kraken bar's time as the only event time (`SignalsPipeline.java`).
+
+### From SQL back to DataStream
+
+Some work is easier outside SQL: exact decimal arithmetic with chosen rounding, and alerts with
+state machines and timers. `toDataStream` turns the joined table back into a stream of rows,
+keeping each row's event time and the watermarks, so the DataStream operators after it still run
+in event time.
+
+### Alerts as state machines, in event-time order
+
+An alert is a small state machine per key: closed, then open once a condition has held for a
+while, then closed again (`DivergenceAlerts.java`). Two thresholds instead of one, a higher one
+to open and a lower one to close, keep a value that hovers around a threshold from opening and
+closing the alert over and over: that is *hysteresis*. "Held for 30 seconds" is an event-time
+timer, set when the condition starts and checked when it fires.
+
+Timers fire as the watermark passes them, but elements arrive whenever they arrive. In a fast
+replay the watermark can jump a minute at once, and an element could then be handled before a
+timer that is earlier in event time, so two replays could produce different alerts. The alert
+operators avoid this by holding each element until the watermark passes it and handling it in
+the same timer queue (`InEventTimeOrder.java`): elements and timers in strict event-time order,
+whatever the watermark does. A harness test feeds the same spreads once with a watermark after
+each and once with a single watermark at the end, and requires identical alerts.
+
+### Draining a job that is behind
+
+The first two replays of a whole day gave different spreads. BTC's stopped at 15:21 in one and
+at 14:54 in the other, ETH's at other times, and SOL's never. Nothing was wrong with the
+spreads: the signals job does more work per trade than the core job, so after a fast replay it
+was minutes behind its input. The check waited only for the core job's candles, then drained
+both jobs. Draining stops each source where it has read to, and only then sends the final
+watermark. The signals job had read SOL's lighter partition to the end of the day but not
+BTC's or ETH's, so their spreads simply ended there, at a point that depended on timing.
+
+`flink drain` now first waits until each job's Kafka source has nothing left to read (its
+`pendingRecords` metric, `ticklab/flinkctl.py`). After that, two replays of the day agree, and
+every one of their 152,691 spreads equals the plain-Python recomputation from the same history.

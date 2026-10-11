@@ -1,0 +1,41 @@
+{
+  "type": "record",
+  "name": "Spread",
+  "namespace": "ticklab.v1",
+  "doc": "One second of one base asset: Binance's last price against Kraken's, converted from USD to USDT with Kraken's USDT/USD price at that time. Written only when Kraken's price is fresh.",
+  "fields": [
+    {"name": "base", "type": "string", "doc": "BTC, ETH or SOL"},
+    {
+      "name": "second",
+      "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "doc": "Start of the second, UTC"
+    },
+    {
+      "name": "binance_price",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "Last Binance trade of the second (the highest trade ID), in USDT"
+    },
+    {
+      "name": "kraken_price",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "Last Kraken trade up to the end of the second, in USD"
+    },
+    {
+      "name": "usdt_usd",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "Last Kraken USDT/USD trade up to the second of that Kraken trade"
+    },
+    {
+      "name": "kraken_price_usdt",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "kraken_price / usdt_usd, rounded half-even to 12 decimal places"
+    },
+    {
+      "name": "spread_bps",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "(kraken_price_usdt - binance_price) / binance_price * 10,000, rounded half-even to 12 decimal places: positive when Kraken is dearer"
+    },
+    {"name": "kraken_age_ms", "type": "long", "doc": "How old the Kraken price is at the end of the second"},
+    {"name": "rate_age_ms", "type": "long", "doc": "How old the USDT/USD price is at the end of the second"}
+  ]
+}

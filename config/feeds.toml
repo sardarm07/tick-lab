@@ -29,3 +29,35 @@ symbol = "SOL/USDT"
 native = "SOLUSDT"
 partition = 2
 silence_s = 45
+
+# Kraken: USD pairs, plus USDT/USD to convert their prices to USDT. The WebSocket and the REST
+# API (with assetVersion=1) both use these names. Silence thresholds by the same rule, from a
+# week of Kraken history (docs/data-study.md).
+
+[[feeds]]
+exchange = "KRAKEN"
+symbol = "BTC/USD"
+native = "BTC/USD"
+partition = 3
+silence_s = 105
+
+[[feeds]]
+exchange = "KRAKEN"
+symbol = "ETH/USD"
+native = "ETH/USD"
+partition = 4
+silence_s = 135
+
+[[feeds]]
+exchange = "KRAKEN"
+symbol = "SOL/USD"
+native = "SOL/USD"
+partition = 5
+silence_s = 135
+
+[[feeds]]
+exchange = "KRAKEN"
+symbol = "USDT/USD"
+native = "USDT/USD"
+partition = 6
+silence_s = 210

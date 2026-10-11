@@ -64,6 +64,14 @@
             <version>${flink.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!-- Flink SQL for the signals job. The image's lib/ has the Table API, planner and
+             runtime (flink-table-api-java-uber, -planner-loader, -runtime). -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-table-api-java-bridge</artifactId>
+            <version>${flink.version}</version>
+            <scope>provided</scope>
+        </dependency>
 
         <!-- Bundled into the job jar. -->
         <dependency>
@@ -101,6 +109,19 @@
             <artifactId>flink-runtime</artifactId>
             <version>${flink.version}</version>
             <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <!-- What the image's lib/ provides for SQL, for MiniCluster tests. -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-table-planner-loader</artifactId>
+            <version>${flink.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-table-runtime</artifactId>
+            <version>${flink.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>

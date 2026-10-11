@@ -1,0 +1,36 @@
+{
+  "type": "record",
+  "name": "Alert",
+  "namespace": "ticklab.v1",
+  "doc": "An alert opening or closing. Keyed by type:key:opened_at; the CLOSED record replaces the OPEN one (update_seq).",
+  "fields": [
+    {
+      "name": "type",
+      "type": {
+        "type": "enum",
+        "name": "AlertType",
+        "symbols": ["DIVERGENCE", "PRICE_MOVE", "VOLUME_SPIKE"]
+      },
+      "doc": "DIVERGENCE: Binance and Kraken disagree on a price for a while. PRICE_MOVE: a minute's return far outside the past hour's. VOLUME_SPIKE: a minute's volume far above the past hour's average."
+    },
+    {"name": "key", "type": "string", "doc": "The base asset (DIVERGENCE) or the feed, exchange:symbol"},
+    {
+      "name": "opened_at",
+      "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "doc": "Event time at which the alert opened"
+    },
+    {
+      "name": "status",
+      "type": {"type": "enum", "name": "AlertStatus", "symbols": ["OPEN", "CLOSED"]}
+    },
+    {"name": "update_seq", "type": "long", "doc": "0 for OPEN, 1 for CLOSED"},
+    {
+      "name": "at",
+      "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "doc": "Event time of this status"
+    },
+    {"name": "value", "type": "double", "doc": "The measure when the alert opened: spread in bps, z-score, or volume ratio"},
+    {"name": "peak", "type": "double", "doc": "The most extreme measure while it was open"},
+    {"name": "explanation", "type": "string", "doc": "What happened, in plain words"}
+  ]
+}

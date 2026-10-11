@@ -19,8 +19,8 @@ log = logging.getLogger(__name__)
 
 SQL_DIR = ROOT / "infra" / "clickhouse" / "sql"
 TRADES_RETENTION_MS = 24 * 3600 * 1000
-# Topics the Flink jobs write to; one partition each is plenty for one row per minute.
-OUTPUT_TOPICS = ("candles", "late-trades", "gaps", "feed-health")
+# Topics the Flink jobs write to; one partition each is plenty for a few rows a second.
+OUTPUT_TOPICS = ("candles", "late-trades", "gaps", "feed-health", "spread-1s", "alerts")
 
 
 def run(settings: Settings) -> None:

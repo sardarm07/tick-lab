@@ -14,11 +14,10 @@
 from __future__ import annotations
 
 import itertools
-import json
 import logging
 import threading
 from collections import Counter
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -26,7 +25,8 @@ import httpx
 from prometheus_client import Counter as MetricCounter
 from prometheus_client import Gauge
 
-from ticklab import binance, binance_rest
+from ticklab import binance, binance_rest, kraken, kraken_rest
+from ticklab.candles import Candle, compare
 from ticklab.clickhouse import ClickHouse
 from ticklab.recorder import Recorder, session_name
 from ticklab.settings import Feed, Settings
@@ -38,7 +38,10 @@ SETTLE = timedelta(minutes=6)
 RECHECK = timedelta(minutes=10)
 MINUTE = timedelta(minutes=1)
 LATENESS = timedelta(minutes=5)  # L in the Flink job: how long a candle can still change
-PRODUCER_SILENCE = timedelta(seconds=10)  # far longer than any normal pause on the stream
+# Live frames stopping for longer than this, on all of an exchange's pairs at once, means the
+# producer was down: far longer than any normal pause (Kraken also sends heartbeats each second,
+# but they aren't stored, and its pairs trade less often).
+PRODUCER_SILENCE = {binance.EXCHANGE: timedelta(seconds=10), kraken.EXCHANGE: timedelta(seconds=60)}
 
 CHECKS = MetricCounter(
     "ticklab_reconcile_checks", "Settled minutes compared", ["exchange", "symbol", "status"]
@@ -46,19 +49,6 @@ CHECKS = MetricCounter(
 SETTLED_UP_TO = Gauge(
     "ticklab_reconcile_settled_minute_seconds", "Start of the newest minute compared", ["symbol"]
 )
-
-
-@dataclass(frozen=True)
-class Candle:
-    open: Decimal
-    high: Decimal
-    low: Decimal
-    close: Decimal
-    volume: Decimal
-    quote_volume: Decimal | None
-    taker_buy_volume: Decimal | None
-    taker_buy_quote_volume: Decimal | None
-    trade_count: int
 
 
 @dataclass(frozen=True)
@@ -72,40 +62,6 @@ class Result:
     @property
     def status(self) -> str:
         return "MISMATCH" if self.differences else "MATCH"
-
-
-def compare(ours: Candle | None, theirs: Candle) -> list[str]:
-    """`field: ours / theirs` for every field that differs; empty means an exact match.
-
-    A minute without a candle of ours counts as zero trades (rule 7): Flink never opens a window
-    without data, while exchanges may publish candles for minutes without trades.
-    """
-    if ours is None:
-        return [] if theirs.trade_count == 0 else [f"trade_count: 0 / {theirs.trade_count}"]
-    differences = []
-    for field in fields(Candle):
-        reference = getattr(theirs, field.name)
-        if reference is not None and getattr(ours, field.name) != reference:
-            differences.append(f"{field.name}: {getattr(ours, field.name)} / {reference}")
-    return differences
-
-
-def parse_binance_klines(text: str) -> dict[datetime, Candle]:
-    candles = {}
-    for row in json.loads(text):
-        minute = datetime.fromtimestamp(row[0] / 1000, UTC)
-        candles[minute] = Candle(
-            open=Decimal(row[1]),
-            high=Decimal(row[2]),
-            low=Decimal(row[3]),
-            close=Decimal(row[4]),
-            volume=Decimal(row[5]),
-            quote_volume=Decimal(row[7]),
-            trade_count=int(row[8]),
-            taker_buy_volume=Decimal(row[9]),
-            taker_buy_quote_volume=Decimal(row[10]),
-        )
-    return candles
 
 
 def our_candles(
@@ -151,7 +107,7 @@ class Reconciler:
         self._clickhouse = ClickHouse(settings)
         self._client = httpx.Client(timeout=30)
         self._recorder = Recorder(
-            settings.recordings_dir, "binance-klines", session_name("reconciler")
+            settings.recordings_dir, "official-candles", session_name("reconciler")
         )
         self._requests = 0
 
@@ -163,20 +119,32 @@ class Reconciler:
     def official(self, feed: Feed, first: datetime, last: datetime) -> dict[datetime, Candle]:
         """Official candles for minutes first..last, recorded and stored on the way."""
         candles: dict[datetime, Candle] = {}
+        if feed.exchange == kraken.EXCHANGE:
+            # Kraken serves only its 720 most recent minutes, all in one response.
+            url, text = kraken_rest.ohlc(self._client, self._settings.kraken_rest_url, feed)
+            self._record(url, text)
+            page = kraken_rest.parse_ohlc(text, feed)
+            candles = {m: c for m, c in page.items() if first <= m <= last}
+            self._store_official(feed, candles)
+            return candles
         start = first
         while start <= last:
             end = min(last, start + 999 * MINUTE)
             url, text = binance_rest.klines(self._client, feed, _ms(start), _ms(end))
-            self._requests += 1
-            received = now_us()
-            self._recorder.open_conn(self._requests, received, url)
-            self._recorder.frame(self._requests, received, text)
-            self._recorder.close_conn(self._requests, received, "done")
-            page = parse_binance_klines(text)
+            self._record(url, text)
+            page = binance_rest.parse_klines(text)
             self._store_official(feed, page)
             candles.update(page)
             start = end + MINUTE
         return candles
+
+    def _record(self, url: str, text: str) -> None:
+        """Raw responses, like WebSocket frames: one connection per request."""
+        self._requests += 1
+        received = now_us()
+        self._recorder.open_conn(self._requests, received, url)
+        self._recorder.frame(self._requests, received, text)
+        self._recorder.close_conn(self._requests, received, "done")
 
     def ours(self, feed: Feed, first: datetime, last: datetime) -> dict[datetime, Candle]:
         return our_candles(self._clickhouse, feed, first, last)
@@ -255,8 +223,8 @@ class Reconciler:
         )
         if not int(any_live):  # replayed history: there is no producer to have been down
             return False
-        start = int((minute - PRODUCER_SILENCE).timestamp() * 1_000_000)
-        end = int((minute + MINUTE + PRODUCER_SILENCE).timestamp() * 1_000_000)
+        start = int((minute - PRODUCER_SILENCE[feed.exchange]).timestamp() * 1_000_000)
+        end = int((minute + MINUTE + PRODUCER_SILENCE[feed.exchange]).timestamp() * 1_000_000)
         arrivals = (
             [start]
             + [
@@ -275,7 +243,7 @@ class Reconciler:
             + [end]
         )
         longest = max(later - earlier for earlier, later in itertools.pairwise(arrivals))
-        return longest > PRODUCER_SILENCE.total_seconds() * 1_000_000
+        return longest > PRODUCER_SILENCE[feed.exchange].total_seconds() * 1_000_000
 
     def _missing_ids(self, feed: Feed, minute: datetime) -> bool:
         """Whether IDs are missing in the minute or right around it."""
@@ -404,5 +372,6 @@ def summary(results: list[Result]) -> str:
     return "\n".join(lines)
 
 
-def binance_feeds(feeds: list[Feed]) -> list[Feed]:
-    return [feed for feed in feeds if feed.exchange == binance.EXCHANGE]
+def reconcilable(feeds: list[Feed], exchanges: tuple[str, ...]) -> list[Feed]:
+    """Every feed of the given exchanges: both publish official 1-minute candles."""
+    return [feed for feed in feeds if feed.exchange in exchanges]

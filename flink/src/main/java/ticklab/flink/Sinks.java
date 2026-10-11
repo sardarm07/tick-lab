@@ -8,9 +8,11 @@ import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.formats.avro.registry.confluent.ConfluentRegistryAvroSerializationSchema;
 import org.apache.avro.specific.SpecificRecord;
+import ticklab.v1.Alert;
 import ticklab.v1.Candle;
 import ticklab.v1.FeedHealth;
 import ticklab.v1.Gap;
+import ticklab.v1.Spread;
 import ticklab.v1.Trade;
 
 /**
@@ -34,6 +36,14 @@ final class Sinks {
 
     static KafkaSink<FeedHealth> health(String bootstrap, String registry) {
         return sink(bootstrap, registry, "feed-health", FeedHealth.class, new HealthKey());
+    }
+
+    static KafkaSink<Spread> spreads(String bootstrap, String registry) {
+        return sink(bootstrap, registry, "spread-1s", Spread.class, new SpreadKey());
+    }
+
+    static KafkaSink<Alert> alerts(String bootstrap, String registry) {
+        return sink(bootstrap, registry, "alerts", Alert.class, new AlertKey());
     }
 
     private static <T extends SpecificRecord> KafkaSink<T> sink(
@@ -77,6 +87,22 @@ final class Sinks {
         @Override
         public byte[] serialize(FeedHealth event) {
             return (event.getExchange() + ":" + event.getSymbol()).getBytes(UTF_8);
+        }
+    }
+
+    /** {@code base}: one partition key per asset. */
+    static final class SpreadKey implements SerializationSchema<Spread> {
+        @Override
+        public byte[] serialize(Spread spread) {
+            return spread.getBase().getBytes(UTF_8);
+        }
+    }
+
+    /** {@code type:key}. */
+    static final class AlertKey implements SerializationSchema<Alert> {
+        @Override
+        public byte[] serialize(Alert alert) {
+            return (alert.getType() + ":" + alert.getKey()).getBytes(UTF_8);
         }
     }
 

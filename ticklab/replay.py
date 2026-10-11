@@ -7,12 +7,12 @@ import logging
 import time
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
-from ticklab import binance, history, recorder
+from ticklab import binance, history, kraken, kraken_history, recorder
 from ticklab.kafka import TradePublisher
-from ticklab.model import Trade
+from ticklab.model import Frame, Trade
 from ticklab.settings import Feed
 
 log = logging.getLogger(__name__)
@@ -26,9 +26,14 @@ class Unparsed:
 
 
 def recorded_trades(
-    paths: Iterable[Path], feeds: list[Feed], start_us: int, end_us: int, unparsed: Unparsed
+    paths: Iterable[Path],
+    feeds: list[Feed],
+    start_us: int,
+    end_us: int,
+    unparsed: Unparsed,
+    exchange: str = binance.EXCHANGE,
 ) -> Iterator[tuple[int, Trade]]:
-    """(arrival time, trade) for each trade in recorded Binance frames that arrived in
+    """(arrival time, trade) for each trade in one exchange's recorded frames that arrived in
     [start_us, end_us), in arrival order."""
     by_native = {feed.native: feed for feed in feeds}
     urls: dict[tuple[str, int], str] = {}
@@ -36,14 +41,25 @@ def recorded_trades(
         if line["kind"] == "open":
             urls[(session, line["conn"])] = line["url"]
         elif line["kind"] == "frame" and start_us <= line["recv_us"] < end_us:
-            scale = binance.time_scale(urls[(session, line["conn"])])
+            url = urls[(session, line["conn"])]
             try:
-                frame = binance.parse_frame(line["raw"], line["recv_us"], by_native, scale)
+                frame = _parse(exchange, line["raw"], line["recv_us"], by_native, url)
             except Exception:
                 unparsed.count += 1
                 continue
             for trade in frame.trades:
                 yield line["recv_us"], trade
+
+
+def _parse(exchange: str, raw: str, recv_us: int, by_native: dict[str, Feed], url: str) -> Frame:
+    if exchange == kraken.EXCHANGE:
+        return kraken.parse_frame(raw, recv_us, by_native)
+    return binance.parse_frame(raw, recv_us, by_native, binance.time_scale(url))
+
+
+def merged(*streams: Iterable[tuple[int, Trade]]) -> Iterator[tuple[int, Trade]]:
+    """Several (time, trade) streams, each in time order, as one."""
+    return heapq.merge(*streams, key=lambda item: item[0])
 
 
 def history_trades(
@@ -58,7 +74,26 @@ def history_trades(
                 trade = binance.parse_history_row(row, feed, scale)
                 yield trade.trade_time, trade
 
-    return heapq.merge(*(one_feed(feed) for feed in feeds), key=lambda item: item[0])
+    return merged(*(one_feed(feed) for feed in feeds))
+
+
+def kraken_history_trades(
+    history_dir: Path, feeds: list[Feed], start: datetime, end: datetime
+) -> Iterator[tuple[int, Trade]]:
+    """(trade time, trade) for each Kraken trade in [start, end), all markets merged by trade
+    time. Every market needs a downloaded file covering the whole range."""
+    paths = {}
+    for feed in feeds:
+        path = kraken_history.find(history_dir, feed, start, end)
+        if path is None:
+            raise FileNotFoundError(f"no Kraken history covers {feed.symbol} {start} to {end}")
+        paths[feed] = path
+
+    def one_feed(feed: Feed) -> Iterator[tuple[int, Trade]]:
+        for trade in kraken_history.read(paths[feed], feed, start, end):
+            yield trade.trade_time, trade
+
+    return merged(*(one_feed(feed) for feed in feeds))
 
 
 @dataclass

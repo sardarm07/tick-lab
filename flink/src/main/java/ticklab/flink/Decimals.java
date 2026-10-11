@@ -11,11 +11,21 @@ final class Decimals {
     private Decimals() {}
 
     /**
-     * The value at scale 12. Throws if that would need rounding: every price, quantity and
-     * product of the two must be exact, or the candles can't be proven equal to the exchange's.
+     * The value at scale 12. Throws if that would need rounding: every price and quantity must be
+     * exact, or the candles can't be proven equal to the exchange's.
      */
     static BigDecimal exact(BigDecimal value) {
         return value.setScale(SCALE, RoundingMode.UNNECESSARY);
+    }
+
+    /**
+     * A sum of prices times quantities, at scale 12: exact when it fits, else rounded half-even.
+     * Of the pairs here, only Kraken's USDT/USD needs more: prices to 5 places and quantities to
+     * 8. Kraken doesn't publish quote volumes, so nothing is compared at the 13th place. Binance
+     * does, and its quote volumes are reconciled exactly, so any rounding there would show.
+     */
+    static BigDecimal notional(BigDecimal value) {
+        return value.setScale(SCALE, RoundingMode.HALF_EVEN);
     }
 
     /** A ratio such as VWAP can't be exact; it is rounded half-even to 12 decimal places. */
