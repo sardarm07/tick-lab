@@ -80,6 +80,32 @@ class Flink:
             log.info("%s stopped with savepoint %s", JOB_NAME, location)
         return location
 
+    def operator_counter(self, name: str) -> int:
+        """A counter summed over every operator and subtask of the running job, such as
+        "duplicates" from the deduplication operator."""
+        job = self.running()
+        if job is None:
+            return 0
+        response = self._client.get(f"/jobs/{job['jid']}")
+        response.raise_for_status()
+        vertices = [vertex["id"] for vertex in response.json()["vertices"]]
+        # The REST API fetches metrics from the TaskManagers lazily: the first request can come
+        # back empty and only start the fetch, so ask again for a few seconds.
+        for _ in range(10):
+            found, total = False, 0
+            for vertex in vertices:
+                base = f"/jobs/{job['jid']}/vertices/{vertex}/subtasks/metrics"
+                available = self._client.get(base).json()
+                ids = [m["id"] for m in available if m["id"].endswith("." + name)]
+                if ids:
+                    found = True
+                    values = self._client.get(base, params={"get": ",".join(ids)}).json()
+                    total += sum(int(float(v.get("sum", 0))) for v in values)
+            if found:
+                return total
+            time.sleep(2)
+        raise RuntimeError(f"no operator reports a metric named {name!r}")
+
     def _upload(self, jar: Path) -> str:
         with open(jar, "rb") as f:
             response = self._client.post(

@@ -1,0 +1,33 @@
+{
+  "type": "record",
+  "name": "Gap",
+  "namespace": "ticklab.v1",
+  "doc": "A run of missing trade IDs in one feed, and what has happened to it. The core job writes DETECTED, CLOSED and EXPIRED; gap repair writes REPAIRED and FAILED. Keyed by exchange:symbol:first_missing_id; the newest status wins.",
+  "fields": [
+    {"name": "exchange", "type": "ticklab.v1.Exchange"},
+    {"name": "symbol", "type": "string"},
+    {"name": "first_missing_id", "type": "long"},
+    {"name": "last_missing_id", "type": "long"},
+    {
+      "name": "status",
+      "type": {
+        "type": "enum",
+        "name": "GapStatus",
+        "symbols": ["DETECTED", "REPAIRED", "FAILED", "CLOSED", "EXPIRED"]
+      },
+      "doc": "DETECTED: the watermark passed the first trade after the gap. REPAIRED: the missing trades were fetched and republished. FAILED: they could not be fetched. CLOSED: every missing trade has arrived. EXPIRED: the lateness budget ran out first."
+    },
+    {
+      "name": "after_trade_time",
+      "type": {"type": "long", "logicalType": "timestamp-micros"},
+      "doc": "Trade time of the first trade after the gap"
+    },
+    {"name": "trades_found", "type": "long", "default": 0, "doc": "For REPAIRED: trades fetched"},
+    {"name": "detail", "type": "string", "default": ""},
+    {
+      "name": "updated_at",
+      "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "doc": "Processing time of this status"
+    }
+  ]
+}

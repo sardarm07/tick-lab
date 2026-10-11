@@ -54,7 +54,7 @@ class CorePipelineTest {
                 .assignTimestampsAndWatermarks(
                         CorePipeline.watermarks(CorePipeline.WATERMARK_BOUND, Duration.ZERO));
         CorePipeline.Streams out = CorePipeline.build(
-                stream, CorePipeline.WATERMARK_BOUND, CorePipeline.LATENESS);
+                stream, CorePipeline.WATERMARK_BOUND, CorePipeline.LATENESS, Map.of());
         CloseableIterator<Candle> candles = out.candles().collectAsync();
         CloseableIterator<TradeEvent> late = out.lateTrades().collectAsync();
         env.execute("core-pipeline-test");

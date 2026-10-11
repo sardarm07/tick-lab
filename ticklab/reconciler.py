@@ -108,6 +108,30 @@ def parse_binance_klines(text: str) -> dict[datetime, Candle]:
     return candles
 
 
+def our_candles(
+    clickhouse: ClickHouse, feed: Feed, first: datetime, last: datetime
+) -> dict[datetime, Candle]:
+    """Our candles for minutes first..last, the latest version of each."""
+    rows = clickhouse.rows(
+        """SELECT minute, open, high, low, close, volume, quote_volume, taker_buy_volume,
+                  taker_buy_quote_volume, trade_count
+        FROM ticklab.candles FINAL
+        WHERE exchange = {exchange:String} AND symbol = {symbol:String}
+          AND minute BETWEEN {first:DateTime64(3)} AND {last:DateTime64(3)}""",
+        exchange=feed.exchange,
+        symbol=feed.symbol,
+        first=first.strftime("%F %T"),
+        last=last.strftime("%F %T"),
+    )
+    return {
+        _parse_time(row["minute"]): Candle(
+            **{k: Decimal(v) for k, v in row.items() if k not in ("minute", "trade_count")},
+            trade_count=int(row["trade_count"]),
+        )
+        for row in rows
+    }
+
+
 def minute_floor(moment: datetime) -> datetime:
     return moment.replace(second=0, microsecond=0)
 
@@ -155,24 +179,7 @@ class Reconciler:
         return candles
 
     def ours(self, feed: Feed, first: datetime, last: datetime) -> dict[datetime, Candle]:
-        rows = self._clickhouse.rows(
-            """SELECT minute, open, high, low, close, volume, quote_volume, taker_buy_volume,
-                      taker_buy_quote_volume, trade_count
-            FROM ticklab.candles FINAL
-            WHERE exchange = {exchange:String} AND symbol = {symbol:String}
-              AND minute BETWEEN {first:DateTime64(3)} AND {last:DateTime64(3)}""",
-            exchange=feed.exchange,
-            symbol=feed.symbol,
-            first=first.strftime("%F %T"),
-            last=last.strftime("%F %T"),
-        )
-        return {
-            _parse_time(row["minute"]): Candle(
-                **{k: Decimal(v) for k, v in row.items() if k not in ("minute", "trade_count")},
-                trade_count=int(row["trade_count"]),
-            )
-            for row in rows
-        }
+        return our_candles(self._clickhouse, feed, first, last)
 
     def _store_official(self, feed: Feed, candles: dict[datetime, Candle]) -> None:
         if not candles:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import sys
 from datetime import UTC, date, datetime, timedelta
@@ -13,7 +14,7 @@ import httpx
 from ticklab import binance, bootstrap, history, recorder, replay, study
 from ticklab.clickhouse import ClickHouse
 from ticklab.kafka import TradePublisher
-from ticklab.settings import Settings, feeds_for
+from ticklab.settings import Settings, feeds_for, load_feeds
 
 log = logging.getLogger("ticklab")
 
@@ -72,6 +73,28 @@ def _parser() -> argparse.ArgumentParser:
     sub = reconciles.add_parser("range", help="every minute in a range, once")
     _time_range(sub)
     sub.set_defaults(run=_reconcile_range)
+
+    command = commands.add_parser("repair", help="gap repair: fetch missing trades")
+    command.add_argument("--metrics-port", type=int, default=8000)
+    command.set_defaults(run=_repair)
+
+    command = commands.add_parser("fake-exchange", help="serve a fixture as Binance's REST API")
+    command.add_argument("--fixture", required=True)
+    command.add_argument("--port", type=int, default=8090)
+    command.set_defaults(run=_fake_exchange)
+
+    command = commands.add_parser("fixture", help="cut a fixture of up to 15 minutes")
+    command.add_argument("--source", choices=["history", "recordings"], default="history")
+    command.add_argument("--from", dest="start", type=_utc_time, required=True)
+    command.add_argument("--minutes", type=int, default=15)
+    command.add_argument("--name", required=True)
+    command.set_defaults(run=_fixture)
+
+    command = commands.add_parser("e2e", help="replay a fixture with chaos and check the result")
+    command.add_argument("--fixture", required=True)
+    command.add_argument("--seed", type=int, default=7)
+    command.add_argument("--speed", type=float, default=10)
+    command.set_defaults(run=_e2e)
 
     command = commands.add_parser("study", help="the M1 data study")
     studies = command.add_subparsers(required=True)
@@ -190,16 +213,19 @@ def _flink(settings: Settings, args: argparse.Namespace) -> None:
 
     flink = Flink(stack=settings.stack)
     if args.action == "start":
+        silence = ",".join(f"{f.exchange}:{f.symbol}={f.silence_s}" for f in load_feeds())
         # Idleness is for live data only: in a replay it would make backlogged trades late.
         idleness = "10" if settings.stack == "live" else "0"
         flink.start(
             [
+                "--idleness-seconds",
+                idleness,
                 "--bootstrap",
                 "redpanda:9092",
                 "--registry",
                 "http://redpanda:8081",
-                "--idleness-seconds",
-                idleness,
+                "--silence",
+                silence,
             ]
         )
     elif args.action == "stop":
@@ -247,6 +273,42 @@ def _reconcile_range(settings: Settings, args: argparse.Namespace) -> int:
         detail = "; ".join(r.differences)
         print(f"- {r.feed.symbol} {r.minute:%Y-%m-%d %H:%M} ({r.cause}): {detail}")
     return 1 if any(r.differences for r in results) else 0
+
+
+def _repair(settings: Settings, args: argparse.Namespace) -> None:
+    import signal
+    import threading
+
+    from prometheus_client import start_http_server
+
+    from ticklab.gap_repair import GapRepair
+
+    stop = threading.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: stop.set())
+    start_http_server(args.metrics_port)
+    GapRepair(settings, load_feeds()).run(stop)
+
+
+def _fake_exchange(settings: Settings, args: argparse.Namespace) -> None:
+    from ticklab import fake_exchange, fixture
+
+    fake_exchange.serve(fixture.load(args.fixture), args.port)
+
+
+def _fixture(settings: Settings, args: argparse.Namespace) -> None:
+    from ticklab import fixture
+
+    made = fixture.cut(
+        settings, feeds_for(binance.EXCHANGE), args.source, args.start, args.minutes, args.name
+    )
+    print(json.dumps(made.meta(), indent=1))
+
+
+def _e2e(settings: Settings, args: argparse.Namespace) -> int:
+    from ticklab.checks import e2e
+
+    return e2e.run(settings, args.fixture, args.seed, args.speed)
 
 
 def _study_disorder(settings: Settings, args: argparse.Namespace) -> None:

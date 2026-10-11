@@ -6,15 +6,22 @@ Trades from Binance (and, from milestone 4, Kraken) flow through Python producer
 are processed by Flink, stored in ClickHouse and shown in Grafana. Every number the pipeline
 produces is checked against the exchanges' own figures.
 
-**Status:** work in progress. Milestones 1 and 2 are done:
+**Status:** work in progress. Milestones 1 to 3 are done:
 
 - live Binance trades are normalised, published as Avro, stored in ClickHouse, recorded raw,
   and can be replayed exactly;
 - Flink removes duplicates and builds 1-minute candles in event time;
-- a reconciler compares every settled minute with Binance's official candles, field by field.
+- a reconciler compares every settled minute with Binance's official candles, field by field;
+- gaps in trade IDs are found in Flink and filled from Binance's REST API, and feeds that go
+  quiet are reported;
+- an end-to-end test replays a fixture with injected chaos (reordering, delays, repeats and
+  missing trades) through a throwaway stack, in CI.
 
 In the milestone 2 check, all 120 live minutes on each of the three pairs, and all 4,320
-minutes of a replayed day of history, matched exactly.
+minutes of a replayed day of history, matched exactly. In the milestone 3 check, the Flink
+TaskManager was killed, the producer restarted and its internet cut for 60 s; every minute
+around those failures still matched (64 on each pair), and all 9 gaps they left were filled
+within a second of being found.
 
 ## Running it
 
@@ -41,8 +48,10 @@ Other targets (`make help` lists them all):
 | `make replay-history FROM=…` | Replays history the same way |
 | `make replay-drain` | Ends a replay: every remaining window fires |
 | `make reconcile FROM=… TO=…` | Compares candles with Binance's official ones, minute by minute |
-| `make ci` | Lint, Python and Java tests, as GitHub Actions runs them |
-| `make check-m1`, `make check-m2` | Each milestone's checks, with their evidence |
+| `make e2e`, `make chaos SEED=11` | The end-to-end test: a fixture with chaos through a throwaway stack |
+| `make fail-taskmanager`, `fail-producer`, `fail-network` | Failures to inject into the live stack |
+| `make ci` | Lint, Python and Java tests and the end-to-end test, as GitHub Actions runs them |
+| `make check-m1` … `make check-m3` | Each milestone's checks, with their evidence |
 
 Settings live in `.env`, created from `.env.example` on first use. Nothing in it is secret.
 

@@ -1,6 +1,7 @@
 package ticklab.flink;
 
 import java.time.Duration;
+import java.util.Map;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
@@ -9,10 +10,12 @@ import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import org.apache.flink.util.OutputTag;
 import ticklab.v1.Candle;
+import ticklab.v1.FeedHealth;
 
 /**
  * The core pipeline, separate from sources and sinks so tests can run it on any input:
- * trades, then deduplication per feed, then 1-minute event-time candles.
+ * trades, then deduplication and gap tracking per feed, then 1-minute event-time candles and
+ * silence detection.
  */
 public final class CorePipeline {
     /** B: how far each feed's watermark trails its newest trade time (M1 data study). */
@@ -46,9 +49,17 @@ public final class CorePipeline {
         return idleness.isZero() ? strategy : strategy.withIdleness(idleness);
     }
 
-    public record Streams(DataStream<Candle> candles, DataStream<TradeEvent> lateTrades) {}
+    public record Streams(
+            DataStream<Candle> candles,
+            DataStream<TradeEvent> lateTrades,
+            DataStream<GapEvent> gaps,
+            DataStream<FeedHealth> health) {}
 
-    public static Streams build(DataStream<TradeEvent> trades, Duration bound, Duration lateness) {
+    public static Streams build(
+            DataStream<TradeEvent> trades,
+            Duration bound,
+            Duration lateness,
+            Map<String, Integer> silenceSeconds) {
         SingleOutputStreamOperator<TradeEvent> unique = trades
                 .keyBy(trade -> trade.feed, Types.STRING)
                 .process(new Dedup(bound, lateness))
@@ -62,6 +73,12 @@ public final class CorePipeline {
                 .aggregate(new CandleAggregate(), new CandleWindowFunction())
                 .name("candles-1m")
                 .uid("candles-1m");
-        return new Streams(candles, candles.getSideOutput(LATE_TRADES));
+        SingleOutputStreamOperator<FeedHealth> health = unique
+                .keyBy(trade -> trade.feed, Types.STRING)
+                .process(new FeedHealthMonitor(silenceSeconds))
+                .name("feed-health")
+                .uid("feed-health");
+        return new Streams(
+                candles, candles.getSideOutput(LATE_TRADES), unique.getSideOutput(Dedup.GAPS), health);
     }
 }

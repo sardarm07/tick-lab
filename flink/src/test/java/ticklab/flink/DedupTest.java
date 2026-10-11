@@ -115,6 +115,61 @@ class DedupTest {
         }
     }
 
+    private static List<String> gaps(
+            KeyedOneInputStreamOperatorTestHarness<String, TradeEvent, TradeEvent> h) {
+        var records = h.getSideOutput(Dedup.GAPS);
+        return records == null
+                ? List.of()
+                : records.stream()
+                        .map(r -> r.getValue().status + " " + r.getValue().firstMissingId + ".."
+                                + r.getValue().lastMissingId)
+                        .toList();
+    }
+
+    @Test
+    void reorderingWithinTheWatermarkBoundIsNotReportedAsAGap() throws Exception {
+        try (var h = harness()) {
+            h.open();
+            send(h, 1, T0);
+            h.processWatermark(T0 + 5_000);
+            send(h, 3, T0 + 5_030); // 2 is missing for a moment
+            send(h, 2, T0 + 5_020);
+            h.processWatermark(T0 + 9_000);
+            assertThat(gaps(h)).isEmpty();
+        }
+    }
+
+    @Test
+    void aGapIsDetectedOnceTheWatermarkPassesTheTradeAfterItAndClosedWhenFilled()
+            throws Exception {
+        try (var h = harness()) {
+            h.open();
+            send(h, 1, T0);
+            h.processWatermark(T0 + 5_000);
+            send(h, 5, T0 + 6_000); // 2..4 missing
+            h.processWatermark(T0 + 5_999);
+            assertThat(gaps(h)).isEmpty(); // not yet past the trade after the gap
+            h.processWatermark(T0 + 6_000);
+            assertThat(gaps(h)).containsExactly("DETECTED 2..4");
+            send(h, 3, T0 + 5_500); // repaired, in any order
+            send(h, 2, T0 + 5_400);
+            send(h, 4, T0 + 5_600);
+            assertThat(gaps(h)).containsExactly("DETECTED 2..4", "CLOSED 2..4");
+        }
+    }
+
+    @Test
+    void aGapStillOpenAfterTheLatenessBudgetExpires() throws Exception {
+        try (var h = harness()) {
+            h.open();
+            send(h, 1, T0);
+            h.processWatermark(T0 + 5_000);
+            send(h, 4, T0 + 6_000); // 2..3 missing
+            h.processWatermark(T0 + 6_000 + LATENESS.toMillis());
+            assertThat(gaps(h)).containsExactly("DETECTED 2..3", "EXPIRED 2..3");
+        }
+    }
+
     @Test
     void stateSurvivesARestore() throws Exception {
         OperatorSubtaskState snapshot;

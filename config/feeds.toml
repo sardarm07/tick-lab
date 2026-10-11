@@ -6,21 +6,26 @@
 #
 # symbol: BASE/QUOTE, the same spelling on every exchange.
 # native: the exchange's own name for the market.
+# silence_s: seconds without a trade before the feed counts as silent: twice the longest gap
+#   between trades in a week of history, rounded up to 15 s (docs/data-study.md).
 
 [[feeds]]
 exchange = "BINANCE"
 symbol = "BTC/USDT"
 native = "BTCUSDT"
 partition = 0
+silence_s = 30
 
 [[feeds]]
 exchange = "BINANCE"
 symbol = "ETH/USDT"
 native = "ETHUSDT"
 partition = 1
+silence_s = 75
 
 [[feeds]]
 exchange = "BINANCE"
 symbol = "SOL/USDT"
 native = "SOLUSDT"
 partition = 2
+silence_s = 45

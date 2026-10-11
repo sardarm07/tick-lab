@@ -8,14 +8,19 @@ import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsIni
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
+import ticklab.v1.Gap;
 import ticklab.v1.Trade;
 
 /**
  * The core job: trades from Kafka, deduplicated per feed, into 1-minute candles. Candles go to
  * the {@code candles} topic, trades too late for their candle to {@code late-trades}.
  *
- * <p>Arguments: {@code --bootstrap host:port --registry url}. Checkpointing and restarts come
- * from the cluster's configuration (compose.yaml).
+ * <p>Gaps in trade IDs go to {@code gaps} (gap repair fetches the missing trades), and feeds that
+ * go quiet to {@code feed-health}.
+ *
+ * <p>Arguments: {@code --bootstrap host:port --registry url --silence feed=seconds,...}, where
+ * a feed is {@code exchange:symbol}. Checkpointing and restarts come from the cluster's
+ * configuration (compose.yaml).
  */
 public final class CoreJob {
     private CoreJob() {}
@@ -26,6 +31,7 @@ public final class CoreJob {
         String registry = options.getOrDefault("registry", "http://redpanda:8081");
         Duration idleness = Duration.ofSeconds(Long.parseLong(
                 options.getOrDefault("idleness-seconds", String.valueOf(CorePipeline.IDLENESS.toSeconds()))));
+        Map<String, Integer> silence = thresholds(options.getOrDefault("silence", ""));
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         KafkaSource<TradeEvent> source = KafkaSource.<TradeEvent>builder()
@@ -42,7 +48,7 @@ public final class CoreJob {
                 .uid("trades-source");
 
         CorePipeline.Streams streams = CorePipeline.build(
-                trades, CorePipeline.WATERMARK_BOUND, CorePipeline.LATENESS);
+                trades, CorePipeline.WATERMARK_BOUND, CorePipeline.LATENESS, silence);
         streams.candles()
                 .sinkTo(Sinks.candles(bootstrap, registry))
                 .name("candles-sink")
@@ -55,7 +61,31 @@ public final class CoreJob {
                 .sinkTo(Sinks.lateTrades(bootstrap, registry))
                 .name("late-trades-sink")
                 .uid("late-trades-sink");
+        streams.gaps()
+                .map(GapEvent::toAvro)
+                .returns(Gap.class)
+                .name("gaps-to-avro")
+                .uid("gaps-to-avro")
+                .sinkTo(Sinks.gaps(bootstrap, registry))
+                .name("gaps-sink")
+                .uid("gaps-sink");
+        streams.health()
+                .sinkTo(Sinks.health(bootstrap, registry))
+                .name("feed-health-sink")
+                .uid("feed-health-sink");
         env.execute("ticklab-core");
+    }
+
+    /** {@code BINANCE:BTC/USDT=30,BINANCE:ETH/USDT=75} into a map. */
+    static Map<String, Integer> thresholds(String spec) {
+        Map<String, Integer> result = new HashMap<>();
+        for (String item : spec.split(",")) {
+            if (!item.isBlank()) {
+                String[] parts = item.split("=", 2);
+                result.put(parts[0], Integer.parseInt(parts[1]));
+            }
+        }
+        return result;
     }
 
     static Map<String, String> parse(String[] args) {

@@ -1,0 +1,29 @@
+{
+  "type": "record",
+  "name": "FeedHealth",
+  "namespace": "ticklab.v1",
+  "doc": "A change in a feed's health, detected with processing-time timers: no trade for longer than the feed's silence threshold (SILENT), then trades again (RECOVERED).",
+  "fields": [
+    {"name": "exchange", "type": "ticklab.v1.Exchange"},
+    {"name": "symbol", "type": "string"},
+    {
+      "name": "event_type",
+      "type": {"type": "enum", "name": "HealthEvent", "symbols": ["SILENT", "RECOVERED"]}
+    },
+    {
+      "name": "event_id",
+      "type": "long",
+      "doc": "Processing time of the event in milliseconds, unique per feed and type"
+    },
+    {
+      "name": "last_trade_seen_at",
+      "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "doc": "Processing time at which the last trade before the silence was seen"
+    },
+    {"name": "threshold_seconds", "type": "int"},
+    {
+      "name": "at",
+      "type": {"type": "long", "logicalType": "timestamp-millis"}
+    }
+  ]
+}

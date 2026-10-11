@@ -14,10 +14,14 @@ UV_ENV := $(UV) --env-file .env
 COMPOSE := docker compose --env-file .env --env-file config/sizing/$(SIZE).env
 LIVE := $(COMPOSE) -p ticklab
 REPLAY := TICKLAB_STACK=replay $(COMPOSE) -p ticklab-replay
+FIXTURE ?= binance-2026-10-10T0400-15m
+SEED ?= 7
+E2E := $(COMPOSE) -f compose.yaml -f compose.ci.yaml
 
 .PHONY: help up down ps logs console replay-up replay-down replay replay-history replay-drain \
-	record history study-disorder study-gaps reconcile lint test test-java ci check-m1 \
-	check-m2 codespace-network
+	record history study-disorder study-gaps reconcile fixture e2e chaos fail-taskmanager \
+	fail-producer fail-network lint test test-java ci check-m1 check-m2 check-m3 \
+	codespace-network
 
 JAR := flink/target/ticklab-flink.jar
 JAVA_SOURCES := $(shell find flink/src/main schemas -type f) flink/pom.xml
@@ -41,7 +45,7 @@ up: .env codespace-network $(JAR) | data/recordings ## Start the live stack, and
 
 down: .env ## Stop the live stack; the Flink job first takes a savepoint (volumes are kept)
 	-@if [ -n "$$($(LIVE) ps -q flink-jobmanager)" ]; then $(UV_ENV) python -m ticklab flink stop; fi
-	$(LIVE) --profile live --profile console down
+	$(LIVE) --profile live --profile replay --profile ci --profile console down
 
 ps: .env ## Show the live stack's containers
 	$(LIVE) --profile live --profile console ps
@@ -54,16 +58,16 @@ console: .env ## Add Redpanda Console to the live stack (http://localhost:8080)
 
 replay-up: .env codespace-network $(JAR) ## Start an empty replay stack with a fresh Flink job
 	@if [ -n "$$($(LIVE) ps -q)" ]; then echo "The live stack is running: make down"; exit 1; fi
-	$(REPLAY) down -v
+	$(REPLAY) --profile replay down -v
 	rm -f data/flink/replay/last-savepoint
-	$(REPLAY) up -d --build --wait
+	$(REPLAY) --profile replay up -d --build --wait
 	TICKLAB_STACK=replay $(UV_ENV) python -m ticklab flink start
 
 replay-drain: .env ## End a replay: Flink drains, so every remaining window fires
 	TICKLAB_STACK=replay $(UV_ENV) python -m ticklab flink drain
 
 replay-down: .env ## Stop the replay stack and delete its data
-	$(REPLAY) down -v
+	$(REPLAY) --profile replay --profile ci down -v
 	rm -f data/flink/replay/last-savepoint
 
 replay: .env ## Replay recordings: make replay FROM=2026-10-11T10:00 TO=2026-10-11T10:15 [SESSION=live-] [SPEED=10]
@@ -91,6 +95,37 @@ study-gaps: .env ## Gaps between trades in history: make study-gaps FROM=2026-10
 reconcile: .env ## Compare candles with official ones: make reconcile FROM=2026-10-10T00:00 TO=2026-10-11T00:00
 	$(UV_ENV) python -m ticklab reconcile range --from $(FROM) --to $(TO)
 
+fixture: .env ## Cut a fixture: make fixture FROM=2026-10-10T04:00 [MINUTES=15] [SOURCE=history] NAME=...
+	$(UV_ENV) python -m ticklab fixture --from $(FROM) --minutes $(or $(MINUTES),15) \
+		--source $(or $(SOURCE),history) --name $(NAME)
+
+e2e: .env codespace-network $(JAR) ## End-to-end test: a fixture with chaos through a throwaway stack
+	@for p in ticklab ticklab-replay; do if [ -n "$$($(COMPOSE) -p $$p ps -q)" ]; then \
+		echo "Stack $$p is running; e2e needs its ports: stop it first"; exit 1; fi; done
+	TICKLAB_STACK=ci $(E2E) -p ticklab-ci --profile ci down -v
+	rm -f data/flink/ci/last-savepoint
+	FIXTURE=$(FIXTURE) TICKLAB_STACK=ci $(E2E) -p ticklab-ci --profile ci up -d --build --wait
+	TICKLAB_STACK=ci $(UV_ENV) python -m ticklab flink start
+	@status=0; TICKLAB_STACK=ci $(UV_ENV) python -m ticklab e2e --fixture $(FIXTURE) \
+		--seed $(SEED) || status=$$?; TICKLAB_STACK=ci $(E2E) -p ticklab-ci --profile ci down -v; \
+		exit $$status
+
+chaos: .env ## The end-to-end test with another seed: make chaos SEED=11
+	$(MAKE) e2e SEED=$(SEED) FIXTURE=$(FIXTURE)
+
+fail-taskmanager: ## Failure: the Flink TaskManager dies and comes back 10 s later
+	docker kill ticklab-flink-taskmanager-1
+	sleep 10
+	docker start ticklab-flink-taskmanager-1
+
+fail-producer: ## Failure: the Binance producer restarts
+	docker restart ticklab-producer-binance-1
+
+fail-network: ## Failure: the producer loses the internet for 60 s; Kafka stays reachable
+	docker network disconnect ticklab_internet ticklab-producer-binance-1
+	sleep 60
+	docker network connect ticklab_internet ticklab-producer-binance-1
+
 # GitHub Codespaces' default image (October 2026) runs Docker with iptables-nft rules, but
 # leftover iptables-legacy rules are also active: their FORWARD policy is DROP and they only
 # allow Docker's default bridge, so every Compose network is cut off, between containers and
@@ -115,10 +150,13 @@ test: ## Run the Python unit tests
 test-java: ## Build the Flink jobs and run their tests
 	cd flink && ./mvnw -B verify
 
-ci: lint test test-java ## Everything GitHub Actions runs
+ci: lint test test-java e2e ## Everything GitHub Actions runs
 
 check-m1: .env | data/recordings ## The M1 checks (about 30 minutes; needs the live stack down)
 	$(UV_ENV) python -m ticklab.checks.m1
 
 check-m2: .env | data/recordings ## The M2 checks (about 3 hours; needs the live stack down)
 	$(UV_ENV) python -m ticklab.checks.m2
+
+check-m3: .env | data/recordings ## The M3 checks (about 90 minutes)
+	$(UV_ENV) python -m ticklab.checks.m3

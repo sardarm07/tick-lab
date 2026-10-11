@@ -2,8 +2,13 @@
 # (ticklab for live, ticklab-replay for replays, so each has its own volumes) and the
 # sizing file (config/sizing/lite.env or full.env).
 #
-# Profiles: `live` adds the producers, `console` adds Redpanda Console. The replay stack
-# runs the shared services only; the replay tool publishes into it from outside Docker.
+# Profiles: `live` adds the producers and the reconciler, `replay` the dashboards for replays,
+# `ci` the fake exchange for the end-to-end test (with compose.ci.yaml), `console` Redpanda
+# Console. The replay tool publishes into a stack from outside Docker.
+#
+# Networks: `default` is internal, with no way out to the internet; only services that need the
+# internet or publish a port also join `internet`. Detaching the producer from `internet` cuts
+# it off from the exchange while Kafka stays reachable (`make fail-network`).
 # Ports are bound to 127.0.0.1, so nothing is reachable from other machines.
 
 x-python: &python
@@ -53,6 +58,7 @@ x-flink: &flink
 services:
   redpanda:
     image: redpandadata/redpanda:v26.2.4
+    networks: [default, internet]
     command:
       - redpanda
       - start
@@ -81,6 +87,7 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:26.8.22.13
+    networks: [default, internet]
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
@@ -113,6 +120,8 @@ services:
 
   prometheus:
     image: prom/prometheus:v3.13.4
+    profiles: [live, replay]
+    networks: [default, internet]
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -133,6 +142,8 @@ services:
 
   grafana:
     image: grafana/grafana:13.2.3-slim
+    profiles: [live, replay]
+    networks: [default, internet]
     # Installs exactly the two plugins this stack uses, at pinned versions, the first time.
     # Grafana's own preinstall step is off: it would also add its whole default plugin set,
     # about 500 MB on disk and 70 MB of memory.
@@ -185,6 +196,7 @@ services:
 
   flink-jobmanager:
     <<: *flink
+    networks: [default, internet]
     command: jobmanager
     ports:
       - 127.0.0.1:8081:8081
@@ -213,6 +225,7 @@ services:
 
   reconciler:
     <<: *python
+    networks: [default, internet]
     profiles: [live]
     command: ["python", "-m", "ticklab", "reconcile", "live"]
     environment:
@@ -234,8 +247,50 @@ services:
       retries: 6
     restart: unless-stopped
 
+  gap-repair:
+    <<: *python
+    networks: [default, internet]
+    profiles: [live, replay, ci]
+    command: ["python", "-m", "ticklab", "repair"]
+    environment:
+      <<: *python-env
+      BINANCE_REST_URL: ${BINANCE_REST_URL:-https://api.binance.com}
+    depends_on:
+      init: {condition: service_completed_successfully}
+    mem_limit: ${GAP_REPAIR_MEM_LIMIT}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/metrics', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+  # Binance's REST API, played from a fixture: for the end-to-end test only.
+  fake-exchange:
+    <<: *python
+    profiles: [ci]
+    command: ["python", "-m", "ticklab", "fake-exchange", "--fixture", "${FIXTURE:-binance-2026-10-10T0400-15m}"]
+    volumes:
+      - ./tests/fixtures/e2e:/app/tests/fixtures/e2e:ro
+    mem_limit: 200m
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/api/v3/ping', timeout=3)"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
   producer-binance:
     <<: *python
+    networks: [default, internet]
     profiles: [live]
     command: ["python", "-m", "ticklab", "produce", "binance"]
     environment:
@@ -263,6 +318,7 @@ services:
 
   console:
     image: redpandadata/console:v3.12.0
+    networks: [default, internet]
     profiles: [console]
     environment:
       KAFKA_BROKERS: redpanda:9092
@@ -274,6 +330,11 @@ services:
       redpanda: {condition: service_healthy}
     mem_limit: 150m
     restart: unless-stopped
+
+networks:
+  default:
+    internal: true
+  internet: {}
 
 volumes:
   redpanda:

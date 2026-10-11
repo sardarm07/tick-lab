@@ -23,6 +23,7 @@ class Feed:
     symbol: str  # BTC/USDT
     native: str  # BTCUSDT, as the exchange spells it
     partition: int
+    silence_s: int = 60  # seconds without a trade before the feed counts as silent
 
     @property
     def base(self) -> str:

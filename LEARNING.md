@@ -201,3 +201,54 @@ margin), and until the job has emitted a candle at least L newer, so neither the
 backlog makes it compare too early. Each mismatch gets a likely cause: the producer was down,
 trades came too late, IDs are missing, or unknown. The goal is not "no mismatches" but "no
 *unexplained* mismatch".
+
+## Milestone 3: gaps, silence, failures and chaos
+
+### Event-time timers versus processing-time timers
+
+A Flink timer fires at a time, but which clock? An *event-time* timer fires when the watermark
+passes it, so it follows the data: replaying the same trades fires it at the same point every
+time. A *processing-time* timer fires on the machine's clock.
+
+Gap detection uses event time (`Dedup.java`): it waits until the watermark passes the first
+trade after a missing ID, so a trade that is merely reordered never looks like a gap. Silence
+detection has to use processing time (`FeedHealthMonitor.java`): when trades stop, event time
+stops too, and an event-time timer would never fire. The price is that silence events depend
+on the clock, so replays aren't expected to reproduce them.
+
+### Gaps from sequence numbers
+
+Within a feed, trade IDs go up by one. The deduplication state already knows the highest ID up
+to which everything has arrived, and which IDs came early, so a gap is simply the missing run
+between them. It is reported DETECTED once the watermark passes the trade after it; gap repair
+(`ticklab/gap_repair.py`) fetches those IDs from the exchange's REST API and publishes them;
+the gap is CLOSED when the last of them has arrived. If repair takes longer than the lateness
+budget, the gap EXPIRES: its trades are counted as skipped, and any that still arrive go to
+`late-trades`.
+
+### Late data as a feature
+
+Repaired trades arrive minutes after their candle was first emitted. Because the candle window
+keeps its state for the lateness budget L, each repaired trade updates the candle and emits it
+again, complete, and storage keeps the newest version. Nothing about a gap needs special
+handling downstream: late data is just data.
+
+### Recovering from a checkpoint
+
+`make fail-taskmanager` kills the TaskManager, where all the job's state lives. Flink notices,
+waits for it to come back (with exponential backoff between attempts), restores the last
+checkpoint, and rewinds the Kafka source to that checkpoint's offsets. Everything after the
+checkpoint is processed again; candles emitted twice are the same rows, so storage doesn't
+change.
+
+### Chaos, deterministically
+
+`ticklab/chaos.py` turns a clean fixture into a messy feed: shuffled within the watermark bound,
+some trades delayed past it but within the lateness budget, repeats, and runs of IDs that never
+arrive. A fixed seed makes the mess the same every run, so a failure can be reproduced. Because
+everything injected stays within what the pipeline promises to handle, the expected result is
+still exact: every candle equal to the exchange's (`ticklab/checks/e2e.py`).
+
+The fake exchange (`ticklab/fake_exchange.py`) plays the fixture's trades and candles as
+Binance's REST API, so gap repair and the checks run unchanged, and CI never touches a real
+exchange.

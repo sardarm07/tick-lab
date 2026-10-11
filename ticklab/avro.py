@@ -70,3 +70,40 @@ def decode(value: bytes, parsed_schema: dict) -> tuple[int, dict]:
     (schema_id,) = struct.unpack(">I", value[1:5])
     record = fastavro.schemaless_reader(io.BytesIO(value[5:]), parsed_schema, None)
     return schema_id, record
+
+
+class Registry:
+    """Schemas fetched from the registry, cached: by ID to read any message, and the latest
+    version of a subject to write with the schema its producer registered."""
+
+    def __init__(self, url: str) -> None:
+        self._url = url
+        self._by_id: dict[int, dict] = {}
+
+    def schema(self, schema_id: int) -> dict:
+        if schema_id not in self._by_id:
+            response = httpx.get(f"{self._url}/schemas/ids/{schema_id}", timeout=10)
+            response.raise_for_status()
+            self._by_id[schema_id] = fastavro.parse_schema(json.loads(response.json()["schema"]))
+        return self._by_id[schema_id]
+
+    def latest(self, subject_name: str) -> tuple[int, dict]:
+        response = httpx.get(f"{self._url}/subjects/{subject_name}/versions/latest", timeout=10)
+        response.raise_for_status()
+        body = response.json()
+        schema = fastavro.parse_schema(json.loads(body["schema"]))
+        self._by_id[body["id"]] = schema
+        return body["id"], schema
+
+    def decode(self, value: bytes) -> dict:
+        if value[:1] != MAGIC:
+            raise ValueError("not in the Confluent wire format")
+        (schema_id,) = struct.unpack(">I", value[1:5])
+        return fastavro.schemaless_reader(io.BytesIO(value[5:]), self.schema(schema_id), None)
+
+
+def encode(record: dict, schema_id: int, parsed_schema: dict) -> bytes:
+    buffer = io.BytesIO()
+    buffer.write(MAGIC + struct.pack(">I", schema_id))
+    fastavro.schemaless_writer(buffer, parsed_schema, record)
+    return buffer.getvalue()

@@ -4,10 +4,10 @@
   "tags": [
     "ticklab"
   ],
-  "description": "Is every feed connected, and is every trade arriving and being stored?",
+  "description": "Is every feed connected, are trades arriving, stored and complete, and are gaps repaired?",
   "timezone": "utc",
   "schemaVersion": 41,
-  "version": 1,
+  "version": 2,
   "editable": false,
   "refresh": "10s",
   "time": {
@@ -266,6 +266,240 @@
           },
           "expr": "sum(increase(ticklab_kafka_delivery_errors_total[1h])) or vector(0)",
           "legendFormat": "errors"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Gaps in trade IDs",
+      "description": "Reported by the core job once the watermark passes the trade after a gap; repaired by gap repair from the exchange's REST API; closed when every missing trade has arrived.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT\n    $__timeInterval(updated_at) AS time,\n    concat(symbol, ' ', toString(status)) AS series,\n    count() AS gaps\nFROM ticklab.gaps FINAL\nWHERE $__timeFilter(updated_at) AND status IN ('DETECTED', 'REPAIRED', 'FAILED', 'EXPIRED')\nGROUP BY time, series\nORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Gap repair, last hour",
+      "description": "Missing trades fetched and republished, and how long repairs took (95th percentile).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95 seconds"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(ticklab_gap_repair_trades_total[1h])) or vector(0)",
+          "legendFormat": "trades fetched"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ticklab_gap_repair_seconds_bucket[1h])))",
+          "legendFormat": "p95 seconds"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Duplicates dropped by Flink, last hour",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(flink_taskmanager_job_task_operator_duplicates[1h])) or vector(0)",
+          "legendFormat": "duplicates"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Open gaps",
+      "description": "Reported but not yet closed: their trades haven't all arrived.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT symbol, first_missing_id, last_missing_id,\n       last_missing_id - first_missing_id + 1 AS trades,\n       arrayStringConcat(groupArray(toString(status)), ', ') AS statuses,\n       min(updated_at) AS detected_at\nFROM ticklab.gaps FINAL\nGROUP BY symbol, first_missing_id, last_missing_id\nHAVING has(groupArray(toString(status)), 'DETECTED')\n   AND NOT has(groupArray(toString(status)), 'CLOSED')\n   AND NOT has(groupArray(toString(status)), 'EXPIRED')\nORDER BY detected_at DESC\nLIMIT 100"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Silence",
+      "description": "A feed is SILENT after its threshold without a trade (processing time), RECOVERED with its next trade.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT at, symbol, event_type, threshold_seconds, last_trade_seen_at\nFROM ticklab.feed_health FINAL\nWHERE $__timeFilter(at)\nORDER BY at DESC\nLIMIT 200"
         }
       ]
     }

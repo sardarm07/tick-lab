@@ -1,0 +1,12 @@
+{
+ "name": "binance-2026-10-10T0400-15m",
+ "source": "history",
+ "start": "2026-10-10T04:00:00+00:00",
+ "minutes": 15,
+ "markets": {
+  "BTCUSDT": 9383,
+  "ETHUSDT": 9163,
+  "SOLUSDT": 3335
+ },
+ "candles": 45
+}

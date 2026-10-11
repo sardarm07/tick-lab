@@ -9,6 +9,8 @@ import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.formats.avro.registry.confluent.ConfluentRegistryAvroSerializationSchema;
 import org.apache.avro.specific.SpecificRecord;
 import ticklab.v1.Candle;
+import ticklab.v1.FeedHealth;
+import ticklab.v1.Gap;
 import ticklab.v1.Trade;
 
 /**
@@ -24,6 +26,14 @@ final class Sinks {
 
     static KafkaSink<Trade> lateTrades(String bootstrap, String registry) {
         return sink(bootstrap, registry, "late-trades", Trade.class, new TradeKey());
+    }
+
+    static KafkaSink<Gap> gaps(String bootstrap, String registry) {
+        return sink(bootstrap, registry, "gaps", Gap.class, new GapKey());
+    }
+
+    static KafkaSink<FeedHealth> health(String bootstrap, String registry) {
+        return sink(bootstrap, registry, "feed-health", FeedHealth.class, new HealthKey());
     }
 
     private static <T extends SpecificRecord> KafkaSink<T> sink(
@@ -50,6 +60,23 @@ final class Sinks {
         public byte[] serialize(Candle candle) {
             return (candle.getExchange() + ":" + candle.getSymbol() + ":" + candle.getMinute())
                     .getBytes(UTF_8);
+        }
+    }
+
+    /** {@code exchange:symbol:first_missing_id}, the gap's identity. */
+    static final class GapKey implements SerializationSchema<Gap> {
+        @Override
+        public byte[] serialize(Gap gap) {
+            return (gap.getExchange() + ":" + gap.getSymbol() + ":" + gap.getFirstMissingId())
+                    .getBytes(UTF_8);
+        }
+    }
+
+    /** {@code exchange:symbol}. */
+    static final class HealthKey implements SerializationSchema<FeedHealth> {
+        @Override
+        public byte[] serialize(FeedHealth event) {
+            return (event.getExchange() + ":" + event.getSymbol()).getBytes(UTF_8);
         }
     }
 
