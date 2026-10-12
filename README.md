@@ -6,7 +6,8 @@ Trades from Binance and Kraken flow through Python producers into Redpanda, are 
 Flink, stored in ClickHouse and shown in Grafana. Every number the pipeline produces is checked
 against the exchanges' own figures.
 
-**Status:** work in progress. Milestones 1 to 8 are done:
+**Status:** done. It was built in eight milestones, each finished only when its check passed
+(`make check-m1` … `make check-m8`):
 
 - live Binance trades are normalised, published as Avro, stored in ClickHouse, recorded raw,
   and can be replayed exactly;
