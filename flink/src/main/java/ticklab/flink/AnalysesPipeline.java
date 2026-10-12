@@ -1,14 +1,16 @@
 package ticklab.flink;
 
 import java.time.Duration;
+import java.util.Set;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import ticklab.v1.LeadLag;
 import ticklab.v1.RoundLevelTest;
+import ticklab.v1.Whale;
 
 /**
- * The analyses, separate from sources and sinks so tests can run them on any input. Both work on
+ * The analyses, separate from sources and sinks so tests can run them on any input. All work on
  * 1-second windows of each feed's trades: trades later than the watermark miss their window and
  * are left out, so like the spreads, these are signals about now, not records.
  *
@@ -18,6 +20,8 @@ import ticklab.v1.RoundLevelTest;
  *       ({@link LeadLagMatcher}).
  *   <li>Round-number magnets (milestone 7, decision note 0021): each Binance pair's seconds are
  *       tested against round and random levels ({@link RoundLevelTester}).
+ *   <li>Whale aftershocks (milestone 8, decision note 0022): the same seconds, as taker orders,
+ *       followed after each whale ({@link WhaleTracker}).
  * </ul>
  */
 public final class AnalysesPipeline {
@@ -40,21 +44,34 @@ public final class AnalysesPipeline {
                 .uid("lead-lag");
     }
 
-    public static DataStream<RoundLevelTest> roundLevels(DataStream<TradeEvent> unique,
-            RoundLevelRules rules) {
+    /** The trades of Binance's {@code bases}, a second at a time, in trade-ID order. */
+    public static DataStream<SecondOfTrades> binanceSeconds(DataStream<TradeEvent> unique,
+            Set<String> bases) {
         return unique
-                .filter(trade -> trade.exchange.equals("BINANCE")
-                        && rules.bands().containsKey(trade.base))
+                .filter(trade -> trade.exchange.equals("BINANCE") && bases.contains(trade.base))
                 .name("binance-pairs")
                 .uid("binance-pairs")
                 .keyBy(trade -> trade.feed, Types.STRING)
                 .window(TumblingEventTimeWindows.of(Duration.ofSeconds(1)))
                 .process(new SecondCollector())
                 .name("seconds")
-                .uid("seconds")
+                .uid("seconds");
+    }
+
+    public static DataStream<RoundLevelTest> roundLevels(DataStream<SecondOfTrades> seconds,
+            RoundLevelRules rules) {
+        return seconds
                 .keyBy(second -> second.base, Types.STRING)
                 .process(new RoundLevelTester(rules))
                 .name("round-levels")
                 .uid("round-levels");
+    }
+
+    public static DataStream<Whale> whales(DataStream<SecondOfTrades> seconds) {
+        return seconds
+                .keyBy(second -> second.base, Types.STRING)
+                .process(new WhaleTracker())
+                .name("whales")
+                .uid("whales");
     }
 }

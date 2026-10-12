@@ -4,7 +4,7 @@
   "tags": [
     "ticklab"
   ],
-  "description": "What the trades say: who moves first (decision note 0020) and round-number magnets (0021).",
+  "description": "What the trades say: who moves first (decision note 0020), round-number magnets (0021) and whale aftershocks (0022).",
   "timezone": "utc",
   "schemaVersion": 41,
   "version": 1,
@@ -202,6 +202,82 @@
           "queryType": "table",
           "pluginVersion": "4.22.1",
           "rawSql": "SELECT touch_time AS \"Reached\", base AS \"Pair\", tier AS \"Tier\", kind AS \"Levels\",\n       round(level, 2) AS \"Level\", approach AS \"From\", outcome AS \"Outcome\",\n       round(close, 2) AS \"Close 60 s later\"\nFROM ticklab.round_levels FINAL\nWHERE $__timeFilter(touch_time)\nORDER BY touch_time DESC\nLIMIT 50"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Whale aftershocks",
+      "description": "Binance. A whale is a taker order worth more than the 99.9th percentile of its pair's orders in the hour before. Its move at each horizon is the last price then against the whale's own price, in bps, positive when the price went on the way the whale pushed it; reverted means negative.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT base AS \"Pair\", horizon AS \"After (s)\", count() AS \"Whales\",\n       round(avg(move), 2) AS \"Average move (bps)\",\n       round(avg(move) - 1.96 * stddevSamp(move) / sqrt(count()), 2) AS \"95% interval, from\",\n       round(avg(move) + 1.96 * stddevSamp(move) / sqrt(count()), 2) AS \"to\",\n       round(100 * countIf(move < 0) / count(), 1) AS \"Reverted (%)\"\nFROM ticklab.whales FINAL\nARRAY JOIN [10, 30, 60, 120] AS horizon,\n           [toFloat64(move_10s), toFloat64(move_30s), toFloat64(move_60s),\n            toFloat64(move_120s)] AS move\nWHERE $__timeFilter(time)\nGROUP BY base, horizon\nORDER BY base, horizon"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Latest whales",
+      "description": "Newest first. Moves in bps, signed by the whale's side.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT time AS \"Time\", base AS \"Pair\", side AS \"Side\", fills AS \"Fills\",\n       round(value, 0) AS \"Value (USDT)\", round(threshold, 0) AS \"Threshold (USDT)\",\n       round(move_10s, 1) AS \"10 s (bps)\", round(move_30s, 1) AS \"30 s\",\n       round(move_60s, 1) AS \"60 s\", round(move_120s, 1) AS \"120 s\"\nFROM ticklab.whales FINAL\nWHERE $__timeFilter(time)\nORDER BY time DESC\nLIMIT 50"
         }
       ]
     }

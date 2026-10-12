@@ -1,0 +1,124 @@
+{
+  "type": "record",
+  "name": "Whale",
+  "namespace": "ticklab.v1",
+  "doc": "A taker order worth more than the 99.9th percentile of its pair's orders in the hour before, and how the price moved after it. Keyed by base:time:first_id (decision note 0022).",
+  "fields": [
+    {
+      "name": "base",
+      "type": "string",
+      "doc": "BTC, ETH or SOL, on Binance"
+    },
+    {
+      "name": "time",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-micros"
+      },
+      "doc": "Trade time of its fills"
+    },
+    {
+      "name": "side",
+      "type": "ticklab.v1.Side",
+      "doc": "The taker's side"
+    },
+    {
+      "name": "first_id",
+      "type": "long"
+    },
+    {
+      "name": "last_id",
+      "type": "long"
+    },
+    {
+      "name": "fills",
+      "type": "int",
+      "doc": "Trades it was filled in"
+    },
+    {
+      "name": "quantity",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 28,
+        "scale": 12
+      },
+      "doc": "In the base asset"
+    },
+    {
+      "name": "value",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 28,
+        "scale": 12
+      },
+      "doc": "Sum of price times quantity, in USDT"
+    },
+    {
+      "name": "price",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 28,
+        "scale": 12
+      },
+      "doc": "value / quantity, rounded half-even to 12 places"
+    },
+    {
+      "name": "threshold",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 28,
+        "scale": 12
+      },
+      "doc": "In USDT: the top of the 99.9th percentile's bucket in the 60 minutes before"
+    },
+    {
+      "name": "window_orders",
+      "type": "long",
+      "doc": "Orders in those 60 minutes"
+    },
+    {
+      "name": "move_10s",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 28,
+        "scale": 12
+      },
+      "doc": "The last price at or before 10 s later against price, in bps, positive in the whale's direction"
+    },
+    {
+      "name": "move_30s",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 28,
+        "scale": 12
+      },
+      "doc": "The same at 30 s"
+    },
+    {
+      "name": "move_60s",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 28,
+        "scale": 12
+      },
+      "doc": "The same at 60 s"
+    },
+    {
+      "name": "move_120s",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 28,
+        "scale": 12
+      },
+      "doc": "The same at 120 s"
+    }
+  ]
+}

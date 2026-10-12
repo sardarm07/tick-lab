@@ -33,6 +33,7 @@ OUTPUT_TOPICS = (
     "alerts",
     "analysis-lead-lag",
     "analysis-round-levels",
+    "analysis-whales",
 )
 
 

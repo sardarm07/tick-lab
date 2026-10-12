@@ -540,3 +540,39 @@ A bounce share from a few hundred tests is uncertain by several percentage point
 reported with a 95% interval (Wilson's, which stays sensible for small counts and shares near
 0 or 1), and a difference between round and random levels only means something when it is
 larger than those intervals.
+
+## Milestone 8: whale aftershocks
+
+### Orders, not trades
+
+One taker order that sweeps the book is filled against many resting orders, and each fill is a
+trade. Measuring trade sizes would measure the resting orders. On Binance the fills of one taker
+order share a time and have consecutive IDs, so they are grouped back into the order first
+(`WhaleTracker.java`, `ticklab/whales.py`), and the order's value is what counts.
+
+### A percentile that keeps up
+
+"Unusually large" has to mean large for the moment: an order that stands out at night is
+ordinary on a busy afternoon. The threshold is the 99.9th percentile of the pair's orders in
+the hour before, and only before: the order's own minute never counts, so nothing from after an
+order decides whether it is a whale. Keeping an hour of orders to sort would be heavy; instead
+each minute's orders are counted in buckets 5% wide, and the hour is the sum of 60 minutes'
+counts, updated as minutes come and go. The percentile is then known to within its bucket.
+
+### Bucket edges both programs agree on
+
+Logarithmic buckets are usually computed with a logarithm, and Java's and Python's logarithms
+needn't agree in the last bit, so an order right at an edge could land in different buckets in
+the job and in Python. The edges here are 1.05^k USDT, and 1.05^k is exactly 21^k / 20^k, so
+they are computed once with whole numbers and compared with whole numbers: every order lands in
+the same bucket on both sides.
+
+### What happened next
+
+For each whale, the price 10, 30, 60 and 120 s later (the last trade at or before each) is
+compared with the whale's own average price and signed by its side, so positive always means
+the price went on the way the whale pushed it. Over four weeks, 32,398 whales: on average the
+price stayed about 1 bp further in the whale's direction for the whole two minutes, with every
+95% interval above zero, and fewer than half had reverted even at 120 s. A large order's mark on
+the price is lasting, not a spike that bounces back; how lasting, the trades of four weeks can
+only say for the first two minutes.

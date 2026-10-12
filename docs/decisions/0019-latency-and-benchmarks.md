@@ -25,6 +25,9 @@ that is realistic, repeatable, and not limited by the machine generating it.
   checkpoint of each job; the peak memory of every container. Results go to `bench/results/`.
 - **Both profiles:** lite (2 cores, 8 GB, parallelism 1) and full (4 cores, 16 GB, parallelism
   2), on the same codespace, switched between runs.
+- **The core and signals jobs only,** the two there were when the benchmarks were run; `make
+  bench` still starts just those two (milestone 6 added the analyses job), so a rerun measures
+  the same thing.
 
 ## Consequences
 

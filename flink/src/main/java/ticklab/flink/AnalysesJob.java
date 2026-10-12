@@ -1,6 +1,7 @@
 package ticklab.flink;
 
 import java.util.Map;
+import java.util.Set;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -10,7 +11,8 @@ import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 /**
  * The analyses job: the same trades again, under its own consumer group and deduplicated the
  * same way, into the analyses of milestones 6 to 8. So far: who moves first
- * ({@code analysis-lead-lag}) and round-number magnets ({@code analysis-round-levels}).
+ * ({@code analysis-lead-lag}), round-number magnets ({@code analysis-round-levels}) and whale
+ * aftershocks ({@code analysis-whales}).
  *
  * <p>Arguments: {@code --bootstrap host:port --registry url --partitions 0,1,2
  * --idleness-seconds 10 --start-at latest|earliest}.
@@ -46,10 +48,16 @@ public final class AnalysesJob {
                 .sinkTo(Sinks.leadLag(bootstrap, registry))
                 .name("lead-lag-sink")
                 .uid("lead-lag-sink");
-        AnalysesPipeline.roundLevels(unique, RoundLevelRules.ROUND_LEVELS)
+        DataStream<SecondOfTrades> seconds =
+                AnalysesPipeline.binanceSeconds(unique, Set.of("BTC", "ETH", "SOL"));
+        AnalysesPipeline.roundLevels(seconds, RoundLevelRules.ROUND_LEVELS)
                 .sinkTo(Sinks.roundLevels(bootstrap, registry))
                 .name("round-levels-sink")
                 .uid("round-levels-sink");
+        AnalysesPipeline.whales(seconds)
+                .sinkTo(Sinks.whales(bootstrap, registry))
+                .name("whales-sink")
+                .uid("whales-sink");
         env.execute("ticklab-analyses");
     }
 }

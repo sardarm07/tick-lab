@@ -26,7 +26,7 @@ E2E := $(COMPOSE) -f compose.yaml -f compose.ci.yaml
 .PHONY: help up down ps logs console replay-up replay-down replay replay-history \
 	replay-kraken-history replay-drain record history kraken-history study-disorder study-gaps \
 	study-signals study-lead-lag study-round-levels reconcile fixture e2e e2e-kraken chaos fail-taskmanager fail-producer \
-	fail-network bench lint test test-java ci check-m1 check-m2 check-m3 check-m4 check-m5 check-m6 check-m7 \
+	fail-network bench lint test test-java ci check-m1 check-m2 check-m3 check-m4 check-m5 check-m6 check-m7 check-m8 \
 	codespace-network
 
 JAR := flink/target/ticklab-flink.jar
@@ -151,7 +151,7 @@ PROFILE ?= lite
 bench: SPEED ?= 10
 
 bench: .env codespace-network $(JAR) | data/history ## Benchmark: the busiest hour, replayed: make bench SPEED=1|10|100 PROFILE=lite|full
-	$(MAKE) replay-up SIZE=$(PROFILE) EXCHANGES=BINANCE,KRAKEN
+	$(MAKE) replay-up SIZE=$(PROFILE) EXCHANGES=BINANCE,KRAKEN JOBS=core,signals
 	TICKLAB_STACK=replay $(UV_ENV) python -m ticklab bench --speed $(SPEED) --profile $(PROFILE)
 
 fail-taskmanager: ## Failure: the Flink TaskManager dies and comes back 10 s later
@@ -215,3 +215,6 @@ check-m6: .env | data/history ## The M6 checks: a week of history through the an
 
 check-m7: .env | data/history ## The M7 checks: two days through the analyses job, four weeks in Python (about 1.5 hours)
 	$(UV_ENV) python -m ticklab.checks.m7
+
+check-m8: .env | data/history ## The M8 checks: two days through the analyses job, four weeks in Python (about 1.5 hours)
+	$(UV_ENV) python -m ticklab.checks.m8

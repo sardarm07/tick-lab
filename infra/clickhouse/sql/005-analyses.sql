@@ -6,6 +6,7 @@
 -- clock (decision note 0020).
 -- `round_levels` keeps one row per test of a level: reached at a moment, decided 60 s later
 -- (decision note 0021).
+-- `whales` keeps one row per whale, by its first fill (decision note 0022).
 
 CREATE TABLE IF NOT EXISTS ticklab.lead_lag
 (
@@ -98,3 +99,59 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS ticklab.round_levels_mv TO ticklab.round_
 SELECT base, tier, kind, level, approach, touch_time, touch_trade_id, decide_second, close,
        outcome, band
 FROM ticklab.round_levels_queue;
+
+CREATE TABLE IF NOT EXISTS ticklab.whales
+(
+    base          LowCardinality(String),
+    time          DateTime64(6, 'UTC'),
+    side          Enum8('BUY' = 1, 'SELL' = 2),
+    first_id      Int64,
+    last_id       Int64,
+    fills         Int32,
+    quantity      Decimal(28, 12),
+    value         Decimal(28, 12),
+    price         Decimal(28, 12),
+    threshold     Decimal(28, 12),
+    window_orders Int64,
+    move_10s      Decimal(28, 12),
+    move_30s      Decimal(28, 12),
+    move_60s      Decimal(28, 12),
+    move_120s     Decimal(28, 12),
+    inserted_at   DateTime64(3, 'UTC') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY toYYYYMM(time)
+ORDER BY (base, time, first_id);
+
+CREATE TABLE IF NOT EXISTS ticklab.whales_queue
+(
+    base          String,
+    time          DateTime64(6, 'UTC'),
+    side          Enum8('BUY' = 1, 'SELL' = 2),
+    first_id      Int64,
+    last_id       Int64,
+    fills         Int32,
+    quantity      Decimal(28, 12),
+    value         Decimal(28, 12),
+    price         Decimal(28, 12),
+    threshold     Decimal(28, 12),
+    window_orders Int64,
+    move_10s      Decimal(28, 12),
+    move_30s      Decimal(28, 12),
+    move_60s      Decimal(28, 12),
+    move_120s     Decimal(28, 12)
+)
+ENGINE = Kafka
+SETTINGS
+    kafka_broker_list = 'redpanda:9092',
+    kafka_topic_list = 'analysis-whales',
+    kafka_group_name = 'clickhouse-whales',
+    kafka_format = 'AvroConfluent',
+    format_avro_schema_registry_url = 'http://redpanda:8081',
+    kafka_num_consumers = 1,
+    kafka_flush_interval_ms = 2000;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS ticklab.whales_mv TO ticklab.whales AS
+SELECT base, time, side, first_id, last_id, fills, quantity, value, price, threshold,
+       window_orders, move_10s, move_30s, move_60s, move_120s
+FROM ticklab.whales_queue;

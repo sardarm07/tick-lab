@@ -16,6 +16,7 @@ import ticklab.v1.LeadLag;
 import ticklab.v1.RoundLevelTest;
 import ticklab.v1.Spread;
 import ticklab.v1.Trade;
+import ticklab.v1.Whale;
 
 /**
  * Kafka sinks. At-least-once is enough: every output has a deterministic key, and storage keeps
@@ -55,6 +56,10 @@ final class Sinks {
     static KafkaSink<RoundLevelTest> roundLevels(String bootstrap, String registry) {
         return sink(bootstrap, registry, "analysis-round-levels", RoundLevelTest.class,
                 new RoundLevelKey());
+    }
+
+    static KafkaSink<Whale> whales(String bootstrap, String registry) {
+        return sink(bootstrap, registry, "analysis-whales", Whale.class, new WhaleKey());
     }
 
     private static <T extends SpecificRecord> KafkaSink<T> sink(
@@ -132,6 +137,15 @@ final class Sinks {
         public byte[] serialize(RoundLevelTest test) {
             return (test.getBase() + ":" + test.getTier() + ":" + test.getKind() + ":"
                     + test.getLevel().toPlainString() + ":" + test.getTouchTradeId())
+                    .getBytes(UTF_8);
+        }
+    }
+
+    /** {@code base:time:first_id}: the order's first fill. */
+    static final class WhaleKey implements SerializationSchema<Whale> {
+        @Override
+        public byte[] serialize(Whale whale) {
+            return (whale.getBase() + ":" + whale.getTime() + ":" + whale.getFirstId())
                     .getBytes(UTF_8);
         }
     }

@@ -6,7 +6,7 @@ Trades from Binance and Kraken flow through Python producers into Redpanda, are 
 Flink, stored in ClickHouse and shown in Grafana. Every number the pipeline produces is checked
 against the exchanges' own figures.
 
-**Status:** work in progress. Milestones 1 to 7 are done:
+**Status:** work in progress. Milestones 1 to 8 are done:
 
 - live Binance trades are normalised, published as Avro, stored in ClickHouse, recorded raw,
   and can be replayed exactly;
@@ -27,7 +27,7 @@ against the exchanges' own figures.
 - a third Flink job finds sharp 1-second price moves on each exchange and pairs them across the
   two, to see which exchange moves first;
 - the same job tests whether prices turn back at round numbers, against random levels as a
-  control.
+  control, and follows the price for two minutes after each very large taker order.
 
 ## How it fits together
 
@@ -47,10 +47,10 @@ flowchart LR
   REC -. replay .-> T
   T --> CORE[Flink core job: deduplication, gaps, 1-minute candles, feed health]
   T --> SIG[Flink signals job: 1-second bars, spreads, alerts]
-  T --> ANA[Flink analyses job: who moves first, round levels]
+  T --> ANA[Flink analyses job: who moves first, round levels, whales]
   CORE --> OUT[[candles, gaps, feed-health, late-trades]]
   SIG --> OUT2[[spread-1s, alerts]]
-  ANA --> OUT3[[analysis-lead-lag, analysis-round-levels]]
+  ANA --> OUT3[[analysis-lead-lag, -round-levels, -whales]]
   OUT -- gaps --> GR[gap repair]
   REST --> GR
   GR --> T
@@ -68,8 +68,9 @@ Producers normalise each exchange's trades into one Avro schema, one Kafka parti
 Three Flink jobs read every trade: the core job removes duplicates, finds gaps (which gap repair
 fills from the exchange's REST API) and builds 1-minute candles; the signals job compares the
 two exchanges every second; the analyses job finds price moves on each exchange and pairs them
-across the two, and tests price levels. ClickHouse stores everything, idempotently, and the
-reconciler checks every minute against the exchange's own candles.
+across the two, tests price levels, and follows the price after very large orders. ClickHouse
+stores everything, idempotently, and the reconciler checks every minute against the exchange's
+own candles.
 
 ## Results
 
@@ -90,9 +91,9 @@ plain-Python recomputation from the same history.
 ### Throughput and latency
 
 The benchmark replays the busiest hour of the history (2026-10-08 15:00 to 16:00 UTC, 1,362,042
-trades from both exchanges) at 1, 10 and 100 times real time, into an empty stack running both
-Flink jobs (`make bench`, decision note 0019). Every run's results, checkpoints and memory
-included, are in [bench/results/](bench/results/).
+trades from both exchanges) at 1, 10 and 100 times real time, into an empty stack running the
+core and signals jobs, the two there were in milestone 5 (`make bench`, decision note 0019).
+Every run's results, checkpoints and memory included, are in [bench/results/](bench/results/).
 
 | Profile | Speed | Trades a second | Largest consumer lag, core / signals | Trade pipeline latency, p50 / p99 | Candle output latency, p50 / p99 |
 |---|---:|---:|---:|---:|---:|
@@ -173,6 +174,24 @@ Random levels, one in each step and nowhere special, are the control (decision n
 in every pair and tier the two intervals overlap. Prices tend to go on through any level they
 have just reached: decided tests bounced 39% to 51% of the time, not half.
 
+### Whale aftershocks
+
+Four weeks of Binance (2026-09-12 to 10-10), by the definitions that `make check-m8` proves
+equal to the job's on two busy days. A whale is a taker order (its fills grouped back together)
+worth more than the 99.9th percentile of the pair's orders in the hour before it. Its move at
+each horizon is the last price then against the whale's own average price, signed so that
+positive means the price went on the way the whale pushed it (decision note 0022).
+
+| Pair | Whales | Move after 10 s | 30 s | 60 s | 120 s | Reverted after 10 s | 120 s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| BTC | 15,654 | +0.87 bps (+0.80 to +0.93) | +0.89 | +0.84 | +0.82 (+0.64 to +0.99) | 32% | 45% |
+| ETH | 10,814 | +0.81 bps (+0.68 to +0.94) | +0.77 | +0.63 | +0.49 (+0.18 to +0.79) | 41% | 46% |
+| SOL | 5,930 | +1.21 bps (+1.03 to +1.39) | +1.36 | +1.40 | +1.21 (+0.74 to +1.69) | 43% | 47% |
+
+Average moves with 95% intervals in brackets. Whales were not reversed on average: the price
+stayed about 1 bp further in the whale's direction for the whole two minutes. More of them had
+reverted the longer one waited, but fewer than half even at 120 s.
+
 ## Limitations
 
 - **One machine, one hour.** The benchmarks describe a GitHub codespace replaying one busy hour
@@ -183,6 +202,9 @@ have just reached: decided tests bounced 39% to 51% of the time, not half.
 - **Leads are measured on the exchanges' clocks.** A difference between Binance's and Kraken's
   clocks would look exactly like a lead, and Kraken, which trades far less often, can show a
   move only at its next trade. The leads are evidence of where prices move first, not proof.
+- **Round levels and whales cover Binance only.** They rely on prices in whole cents, and on
+  the fills of one taker order sharing a time and consecutive trade IDs; Kraken would need rules
+  of its own.
 - **One watermark per job.** A minute's candles wait for the quietest of the seven feeds: live,
   until it trades past the minute or has been silent for 10 s. A busy pair's candle can wait on
   a quiet one.
@@ -231,7 +253,7 @@ Other targets (`make help` lists them all):
 | `make e2e`, `make e2e-kraken`, `make chaos SEED=11` | The end-to-end tests: a fixture with chaos through a throwaway stack |
 | `make fail-taskmanager`, `fail-producer`, `fail-network` [`PRODUCER=kraken`] | Failures to inject into the live stack |
 | `make ci` | Lint, Python and Java tests and the end-to-end test, as GitHub Actions runs them |
-| `make check-m1` … `make check-m7` | Each milestone's checks, with their evidence |
+| `make check-m1` … `make check-m8` | Each milestone's checks, with their evidence |
 
 Settings live in `.env`, created from `.env.example` on first use. Nothing in it is secret.
 

@@ -1,7 +1,8 @@
 package ticklab.flink;
 
 /**
- * One feed's trades of one second, in trade-ID order, with prices in whole cents (a Flink POJO).
+ * One feed's trades of one second, in trade-ID order (a Flink POJO): prices in whole cents,
+ * quantities in units of 1e-8.
  */
 public class SecondOfTrades {
     public String base;
@@ -10,6 +11,8 @@ public class SecondOfTrades {
     public long[] ids;
     public long[] timesMicros;
     public long[] priceCents;
+    public long[] quantityE8;
+    public boolean[] takerBuy;
 
     public SecondOfTrades() {}
 }
