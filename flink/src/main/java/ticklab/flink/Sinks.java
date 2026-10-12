@@ -13,6 +13,7 @@ import ticklab.v1.Candle;
 import ticklab.v1.FeedHealth;
 import ticklab.v1.Gap;
 import ticklab.v1.LeadLag;
+import ticklab.v1.RoundLevelTest;
 import ticklab.v1.Spread;
 import ticklab.v1.Trade;
 
@@ -49,6 +50,11 @@ final class Sinks {
 
     static KafkaSink<LeadLag> leadLag(String bootstrap, String registry) {
         return sink(bootstrap, registry, "analysis-lead-lag", LeadLag.class, new LeadLagKey());
+    }
+
+    static KafkaSink<RoundLevelTest> roundLevels(String bootstrap, String registry) {
+        return sink(bootstrap, registry, "analysis-round-levels", RoundLevelTest.class,
+                new RoundLevelKey());
     }
 
     private static <T extends SpecificRecord> KafkaSink<T> sink(
@@ -116,6 +122,16 @@ final class Sinks {
         @Override
         public byte[] serialize(LeadLag record) {
             return (record.getBase() + ":" + record.getLeader() + ":" + record.getLeaderTime())
+                    .getBytes(UTF_8);
+        }
+    }
+
+    /** {@code base:tier:kind:level:touch_trade_id}: a trade reaches a level at most once. */
+    static final class RoundLevelKey implements SerializationSchema<RoundLevelTest> {
+        @Override
+        public byte[] serialize(RoundLevelTest test) {
+            return (test.getBase() + ":" + test.getTier() + ":" + test.getKind() + ":"
+                    + test.getLevel().toPlainString() + ":" + test.getTouchTradeId())
                     .getBytes(UTF_8);
         }
     }

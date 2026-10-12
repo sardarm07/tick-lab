@@ -25,8 +25,8 @@ E2E := $(COMPOSE) -f compose.yaml -f compose.ci.yaml
 
 .PHONY: help up down ps logs console replay-up replay-down replay replay-history \
 	replay-kraken-history replay-drain record history kraken-history study-disorder study-gaps \
-	study-signals study-lead-lag reconcile fixture e2e e2e-kraken chaos fail-taskmanager fail-producer \
-	fail-network bench lint test test-java ci check-m1 check-m2 check-m3 check-m4 check-m5 check-m6 \
+	study-signals study-lead-lag study-round-levels reconcile fixture e2e e2e-kraken chaos fail-taskmanager fail-producer \
+	fail-network bench lint test test-java ci check-m1 check-m2 check-m3 check-m4 check-m5 check-m6 check-m7 \
 	codespace-network
 
 JAR := flink/target/ticklab-flink.jar
@@ -109,6 +109,9 @@ study-signals: .env ## Spreads, moves and volumes behind the alert thresholds: m
 
 study-lead-lag: .env ## 1-second returns and moves behind the lead-lag thresholds: make study-lead-lag FROM=2026-10-04 TO=2026-10-10
 	$(UV_ENV) python -m ticklab study lead-lag --from $(FROM) --to $(TO)
+
+study-round-levels: .env ## 60-second moves and level tests behind the round-level bands: make study-round-levels FROM=2026-09-12 TO=2026-10-10
+	$(UV_ENV) python -m ticklab study round-levels --from $(FROM) --to $(TO)
 
 study-gaps: .env ## Gaps between trades in history: make study-gaps FROM=2026-10-03 TO=2026-10-09 [EXCHANGE=kraken]
 	$(UV_ENV) python -m ticklab study gaps --from $(FROM) --to $(TO) \
@@ -207,5 +210,8 @@ check-m4: .env | data/recordings data/history ## The M4 checks (about 5 hours)
 check-m5: .env | data/history ## The M5 checks for one profile: make check-m5 PROFILE=lite|full
 	$(UV_ENV) python -m ticklab.checks.m5 --profile $(PROFILE)
 
-check-m6: .env | data/history ## The M6 checks: a week of history through the analyses job (about 2 hours)
+check-m6: .env | data/history ## The M6 checks: a week of history through the analyses job (about 1.5 hours)
 	$(UV_ENV) python -m ticklab.checks.m6
+
+check-m7: .env | data/history ## The M7 checks: two days through the analyses job, four weeks in Python (about 1.5 hours)
+	$(UV_ENV) python -m ticklab.checks.m7

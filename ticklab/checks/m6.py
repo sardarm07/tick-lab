@@ -88,17 +88,19 @@ def replayed(report: Report, settings: Settings) -> None:
     stream = stream_rows(clickhouse)
     check_stream_against_batch(report, stream, batch)
     findings(report, stream)
-    check_dashboard(report)
+    check_dashboard(report, START, END, "4. the Analyses dashboard shows the week")
     make("replay-down")
 
 
-def settle(clickhouse: ClickHouse, quiet_s: float = 30, timeout_s: float = 1800) -> None:
-    """Until ClickHouse has stopped storing trades and lead-lag rows."""
+def settle(
+    clickhouse: ClickHouse, table: str = "lead_lag", quiet_s: float = 30, timeout_s: float = 1800
+) -> None:
+    """Until ClickHouse has stopped storing trades and rows of the analysis' `table`."""
     deadline = time.monotonic() + timeout_s
     last, since = None, time.monotonic()
     while time.monotonic() < deadline:
         state = clickhouse.value(
-            "SELECT (count(), (SELECT count() FROM ticklab.trades)) FROM ticklab.lead_lag"
+            f"SELECT (count(), (SELECT count() FROM ticklab.trades)) FROM ticklab.{table}"
         )
         if state != last:
             last, since = state, time.monotonic()
@@ -146,7 +148,12 @@ def recompute(settings: Settings) -> tuple[Feeds, set[Row]]:
     return {feed: (n, low, high) for feed, (n, low, high) in feeds.items()}, rows
 
 
-def check_delivery(report: Report, clickhouse: ClickHouse, feeds: Feeds) -> None:
+def check_delivery(
+    report: Report,
+    clickhouse: ClickHouse,
+    feeds: Feeds,
+    check: str = "1. the week replayed through the analyses job",
+) -> None:
     """Each trade stored once: per feed, the count after merging repeats (FINAL) and the range of
     trade IDs equal the history's."""
     stored: Feeds = {}
@@ -166,7 +173,7 @@ def check_delivery(report: Report, clickhouse: ClickHouse, feeds: Feeds) -> None
         say(f"| {':'.join(feed)} | {n:,} | {stored[feed][0]:,} | {low} to {high} |")
     trades = sum(n for n, _, _ in feeds.values())
     report.record(
-        "1. the week replayed through the analyses job: every trade delivered and stored once",
+        f"{check}: every trade delivered and stored once",
         bool(feeds) and stored == feeds,
         f"({trades:,} trades)",
     )
@@ -259,19 +266,23 @@ def findings(report: Report, stream: set[Row]) -> None:
     )
 
 
-def check_dashboard(report: Report) -> None:
+def check_dashboard(
+    report: Report, first: datetime, last: datetime, check: str, panels: set[str] | None = None
+) -> None:
+    """Every panel of the Analyses dashboard, from `first` to `last`: every query must succeed,
+    and the panels named in `panels` (all, if None) must have rows."""
     dashboard = json.loads((DASHBOARDS / "analyses.json").read_text())
-    start, end = str(int(START.timestamp() * 1000)), str(int(END.timestamp() * 1000))
+    start, end = str(int(first.timestamp() * 1000)), str(int(last.timestamp() * 1000))
     problems = []
     for panel in dashboard["panels"]:
         points, errors = panel_data(dashboard, panel, start, end)
         problems += [f"{panel['title']} {error}" for error in errors]
-        if points == 0:
+        if points == 0 and (panels is None or panel["title"] in panels):
             problems.append(f"{panel['title']}: no rows")
     for line in problems:
         say(f"- {line}")
     report.record(
-        "4. the Analyses dashboard shows the week: every query succeeds, every table has rows",
+        f"{check}: every query succeeds, every table has rows",
         not problems,
         f"({len(dashboard['panels'])} panels)",
     )

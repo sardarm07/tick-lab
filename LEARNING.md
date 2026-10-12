@@ -490,3 +490,53 @@ whole SQL planner. Classes live outside the heap, in the JVM's *metaspace*. Thre
 MiB of the 160 MB it had: `OutOfMemoryError: Metaspace`, the JobManager restarted, and a
 JobManager without high availability comes back with no jobs at all. Measuring each job's share
 gave the new size, 256 MB (decision note 0010).
+
+## Milestone 7: round-number magnets
+
+### A control group for a claim
+
+"Prices turn back at round numbers" is a comparison: more often than at other numbers. So the
+job tests other numbers too. Alongside each tier of round levels it tests as many random levels,
+one in each step, at a place drawn from SHA-256 of a fixed seed, the pair, the tier and the
+step: every run, and the job and Python alike, test the same ones (`RoundLevelTester.java`,
+`ticklab/round_levels.py`).
+
+The control changed what the numbers mean. With a band of one typical minute's move, a level
+that pulled on nothing would seem to bounce half the time. Random levels bounced only 39% to
+51% of the time: a price that has just travelled a band's width to reach a level tends to keep
+going. Measured against 50%, every level would look like a weak barrier. Measured against the
+random levels, round ones were no different: in every pair and tier, the two bounce shares'
+95% intervals overlap.
+
+### Deciding later, in event time
+
+A test is decided by the close at the end of the second 60 s after it began: an event-time
+timer, as for the alerts. The decision must see the close of the seconds before it, in order,
+even when a fast replay moves the watermark many seconds at once and delivers several seconds
+together. The tester therefore holds each second until the watermark passes it and handles
+seconds and timers in one event-time order (`InEventTimeOrder`), as the alert operators do.
+
+### Exact, so two programs agree
+
+Prices are whole cents, levels are whole cents, and the random levels come from integer
+arithmetic on the hash, so the job and Python put every level in the same place and decide every
+test the same way. `make check-m7` requires all of the job's tests over two busy days to equal
+Python's: 3,509 tests from 18 million trades, every one the same.
+
+### An identity two events can share
+
+Every row in storage needs an identity, and the first one chosen for a level test was the level
+and the moment it was reached. In a spike on 2026-10-08, ETH swung 1.4% within one second, and
+taker orders filled at the same microsecond pushed it through the same levels several times,
+up and down. Python counted each test; the table keeps one row per key, so tests that shared a
+moment collapsed into one, and the check found seven missing. Even the check's own comparison
+hid some: a set merges two identical rows, so it now compares counts. The fix was twofold: a
+level is tested once at a time (overlapping tests aren't independent anyway), and a test is
+identified by the trade that reached the level, which nothing else can share.
+
+### A share needs its interval
+
+A bounce share from a few hundred tests is uncertain by several percentage points. Each one is
+reported with a 95% interval (Wilson's, which stays sensible for small counts and shares near
+0 or 1), and a difference between round and random levels only means something when it is
+larger than those intervals.

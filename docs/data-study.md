@@ -229,3 +229,19 @@ Moves and pairs a day, for a grid of thresholds:
 - The thresholds: Binance's 99.9th percentile, rounded up to a whole basis point, so BTC 5, ETH
   7 and SOL 9 bps (decision note 0020). Each is at least 3.6 times the 90th percentile of the
   noisier exchange's bounce.
+
+## Round-number magnets: how far prices move in a minute (milestone 7)
+
+`make study-round-levels FROM=2026-09-12 TO=2026-10-10` reads four weeks of Binance's trades and
+measures how far each pair moves in 60 s: from the close of each second with trades to the
+close 60 s later (the close of a second without trades is the one before it).
+
+| Pair | Seconds | p25 (bps) | p50 (bps) | p75 (bps) | p50 in USDT, at the median price |
+|---|---:|---:|---:|---:|---:|
+| BTC/USDT | 2,222,245 | 0.70 | 1.97 | 4.15 | 16.50 |
+| ETH/USDT | 1,817,097 | 1.18 | 2.88 | 5.81 | 0.77 |
+| SOL/USDT | 1,644,873 | 1.71 | 4.11 | 7.72 | 0.05 |
+
+The band of each pair is that median in whole cents: BTC 16.50, ETH 0.77 and SOL 0.05 USDT
+(decision note 0021). The study also runs the tests for a grid of bands; the findings, from the
+final definitions, are in the README and in `make check-m7`'s output.

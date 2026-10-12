@@ -6,7 +6,7 @@ Trades from Binance and Kraken flow through Python producers into Redpanda, are 
 Flink, stored in ClickHouse and shown in Grafana. Every number the pipeline produces is checked
 against the exchanges' own figures.
 
-**Status:** work in progress. Milestones 1 to 6 are done:
+**Status:** work in progress. Milestones 1 to 7 are done:
 
 - live Binance trades are normalised, published as Avro, stored in ClickHouse, recorded raw,
   and can be replayed exactly;
@@ -25,7 +25,9 @@ against the exchanges' own figures.
   4-core machine, measures throughput, consumer lag and latency, which a "Pipeline" dashboard
   also shows live;
 - a third Flink job finds sharp 1-second price moves on each exchange and pairs them across the
-  two, to see which exchange moves first.
+  two, to see which exchange moves first;
+- the same job tests whether prices turn back at round numbers, against random levels as a
+  control.
 
 ## How it fits together
 
@@ -45,10 +47,10 @@ flowchart LR
   REC -. replay .-> T
   T --> CORE[Flink core job: deduplication, gaps, 1-minute candles, feed health]
   T --> SIG[Flink signals job: 1-second bars, spreads, alerts]
-  T --> ANA[Flink analyses job: who moves first]
+  T --> ANA[Flink analyses job: who moves first, round levels]
   CORE --> OUT[[candles, gaps, feed-health, late-trades]]
   SIG --> OUT2[[spread-1s, alerts]]
-  ANA --> OUT3[[analysis-lead-lag]]
+  ANA --> OUT3[[analysis-lead-lag, analysis-round-levels]]
   OUT -- gaps --> GR[gap repair]
   REST --> GR
   GR --> T
@@ -66,8 +68,8 @@ Producers normalise each exchange's trades into one Avro schema, one Kafka parti
 Three Flink jobs read every trade: the core job removes duplicates, finds gaps (which gap repair
 fills from the exchange's REST API) and builds 1-minute candles; the signals job compares the
 two exchanges every second; the analyses job finds price moves on each exchange and pairs them
-across the two. ClickHouse stores everything, idempotently, and the reconciler checks every
-minute against the exchange's own candles.
+across the two, and tests price levels. ClickHouse stores everything, idempotently, and the
+reconciler checks every minute against the exchange's own candles.
 
 ## Results
 
@@ -150,6 +152,27 @@ Binance moved first in four pairs out of five, about a quarter of a second ahead
 pattern holds for every threshold from 2 to 20 bps (docs/data-study.md). More than half of all
 moves weren't matched by the other exchange within 2 s at all.
 
+### Round-number magnets
+
+Four weeks of Binance (2026-09-12 to 10-10), by the definitions that `make check-m7` proves equal
+to the job's on two busy days. A test starts when the price reaches a level from beyond its band
+(the pair's median one-minute move: BTC 16.50, ETH 0.77, SOL 0.05 USDT). The close 60 s later
+decides it: a band past the level is a break, a band back a bounce, anything between neutral.
+Random levels, one in each step and nowhere special, are the control (decision note 0021).
+
+| Pair | Tier | Round levels: tests | Bounce share of decided | Random levels: tests | Bounce share of decided |
+|---|---|---:|---:|---:|---:|
+| BTC | major (every 1,000) | 1,135 | 42.4% (39.0% to 45.9%) | 954 | 41.9% (38.1% to 45.8%) |
+| BTC | minor (every 100) | 11,196 | 38.8% (37.7% to 39.9%) | 11,112 | 39.2% (38.1% to 40.3%) |
+| ETH | major (every 100) | 521 | 47.2% (41.8% to 52.7%) | 444 | 43.4% (37.9% to 49.1%) |
+| ETH | minor (every 10) | 5,017 | 45.4% (43.6% to 47.1%) | 4,890 | 43.1% (41.4% to 44.8%) |
+| SOL | major (every 10) | 428 | 46.6% (40.3% to 53.0%) | 164 | 50.9% (41.8% to 59.9%) |
+| SOL | minor (every 1) | 3,153 | 47.5% (45.2% to 49.8%) | 2,815 | 48.8% (46.5% to 51.1%) |
+
+95% intervals in brackets. Round numbers turned prices back no more often than random levels:
+in every pair and tier the two intervals overlap. Prices tend to go on through any level they
+have just reached: decided tests bounced 39% to 51% of the time, not half.
+
 ## Limitations
 
 - **One machine, one hour.** The benchmarks describe a GitHub codespace replaying one busy hour
@@ -203,11 +226,12 @@ Other targets (`make help` lists them all):
 | `make reconcile FROM=… TO=…` | Compares candles with the exchanges' official ones, minute by minute |
 | `make study-signals FROM=… TO=…` | The distributions behind the alert thresholds |
 | `make study-lead-lag FROM=… TO=…` | The 1-second moves behind the lead-lag thresholds |
+| `make study-round-levels FROM=… TO=…` | The 60-second moves behind the round-level bands |
 | `make bench SPEED=10 PROFILE=lite` | Replays the busiest hour at 1, 10 or 100 times real time and measures it |
 | `make e2e`, `make e2e-kraken`, `make chaos SEED=11` | The end-to-end tests: a fixture with chaos through a throwaway stack |
 | `make fail-taskmanager`, `fail-producer`, `fail-network` [`PRODUCER=kraken`] | Failures to inject into the live stack |
 | `make ci` | Lint, Python and Java tests and the end-to-end test, as GitHub Actions runs them |
-| `make check-m1` … `make check-m6` | Each milestone's checks, with their evidence |
+| `make check-m1` … `make check-m7` | Each milestone's checks, with their evidence |
 
 Settings live in `.env`, created from `.env.example` on first use. Nothing in it is secret.
 

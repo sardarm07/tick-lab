@@ -4,7 +4,7 @@
   "tags": [
     "ticklab"
   ],
-  "description": "What the trades say: who moves first (decision note 0020).",
+  "description": "What the trades say: who moves first (decision note 0020) and round-number magnets (0021).",
   "timezone": "utc",
   "schemaVersion": 41,
   "version": 1,
@@ -126,6 +126,82 @@
           "queryType": "table",
           "pluginVersion": "4.22.1",
           "rawSql": "SELECT leader_time AS \"First move\", base AS \"Base\", direction AS \"Direction\",\n       leader AS \"First\", round(lead_us / 1000, 1) AS \"Lead (ms)\",\n       round(leader_bps, 2) AS \"First move (bps)\", round(follower_bps, 2) AS \"Second move (bps)\"\nFROM ticklab.lead_lag FINAL\nWHERE $__timeFilter(leader_time)\nORDER BY leader_time DESC\nLIMIT 50"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Round levels against random ones",
+      "description": "Binance. A test starts when the price reaches a level from beyond its band (the pair's typical one-minute move); the close 60 s later decides it: a band past the level is a break, a band back a bounce. Random levels, as many and nowhere special, show what to expect from any level.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT \"Pair\", \"Tier\", \"Levels\", \"Tests\", \"Break\", \"Bounce\", \"Neutral\",\n       round(100 * p, 1) AS \"Bounce share of decided (%)\",\n       round(100 * (p + z2 / (2 * n) - 1.96 * sqrt(p * (1 - p) / n + z2 / (4 * n * n)))\n             / (1 + z2 / n), 1) AS \"95% interval, from (%)\",\n       round(100 * (p + z2 / (2 * n) + 1.96 * sqrt(p * (1 - p) / n + z2 / (4 * n * n)))\n             / (1 + z2 / n), 1) AS \"to (%)\"\nFROM (\n    SELECT base AS \"Pair\", tier AS \"Tier\", kind AS \"Levels\", count() AS \"Tests\",\n           countIf(outcome = 'BREAK') AS \"Break\", countIf(outcome = 'BOUNCE') AS \"Bounce\",\n           countIf(outcome = 'NEUTRAL') AS \"Neutral\",\n           \"Break\" + \"Bounce\" AS n, \"Bounce\" / n AS p, 3.8416 AS z2\n    FROM ticklab.round_levels FINAL\n    WHERE $__timeFilter(touch_time)\n    GROUP BY base, tier, kind)\nORDER BY \"Pair\", \"Tier\", \"Levels\"\n"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Latest level tests",
+      "description": "Newest first.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT touch_time AS \"Reached\", base AS \"Pair\", tier AS \"Tier\", kind AS \"Levels\",\n       round(level, 2) AS \"Level\", approach AS \"From\", outcome AS \"Outcome\",\n       round(close, 2) AS \"Close 60 s later\"\nFROM ticklab.round_levels FINAL\nWHERE $__timeFilter(touch_time)\nORDER BY touch_time DESC\nLIMIT 50"
         }
       ]
     }

@@ -4,6 +4,8 @@
 -- the other, or a move the other exchange didn't follow (no follower). The leader's move is its
 -- identity, so a repeat after a restart replaces the row. Times are on each exchange's own
 -- clock (decision note 0020).
+-- `round_levels` keeps one row per test of a level: reached at a moment, decided 60 s later
+-- (decision note 0021).
 
 CREATE TABLE IF NOT EXISTS ticklab.lead_lag
 (
@@ -48,3 +50,51 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS ticklab.lead_lag_mv TO ticklab.lead_lag A
 SELECT base, direction, leader, leader_time, leader_bps, follower_time, follower_bps, lead_us,
        threshold_bps
 FROM ticklab.lead_lag_queue;
+
+CREATE TABLE IF NOT EXISTS ticklab.round_levels
+(
+    base          LowCardinality(String),
+    tier          Enum8('MAJOR' = 1, 'MINOR' = 2),
+    kind          Enum8('ROUND' = 1, 'RANDOM' = 2),
+    level         Decimal(28, 12),
+    approach      Enum8('FROM_BELOW' = 1, 'FROM_ABOVE' = 2),
+    touch_time    DateTime64(6, 'UTC'),
+    touch_trade_id Int64 COMMENT 'The trade that reached the level: the identity of the test',
+    decide_second DateTime64(3, 'UTC'),
+    close         Decimal(28, 12),
+    outcome       Enum8('BREAK' = 1, 'BOUNCE' = 2, 'NEUTRAL' = 3),
+    band          Decimal(28, 12),
+    inserted_at   DateTime64(3, 'UTC') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY toYYYYMM(touch_time)
+ORDER BY (base, tier, kind, level, touch_trade_id);
+
+CREATE TABLE IF NOT EXISTS ticklab.round_levels_queue
+(
+    base          String,
+    tier          Enum8('MAJOR' = 1, 'MINOR' = 2),
+    kind          Enum8('ROUND' = 1, 'RANDOM' = 2),
+    level         Decimal(28, 12),
+    approach      Enum8('FROM_BELOW' = 1, 'FROM_ABOVE' = 2),
+    touch_time    DateTime64(6, 'UTC'),
+    touch_trade_id Int64,
+    decide_second DateTime64(3, 'UTC'),
+    close         Decimal(28, 12),
+    outcome       Enum8('BREAK' = 1, 'BOUNCE' = 2, 'NEUTRAL' = 3),
+    band          Decimal(28, 12)
+)
+ENGINE = Kafka
+SETTINGS
+    kafka_broker_list = 'redpanda:9092',
+    kafka_topic_list = 'analysis-round-levels',
+    kafka_group_name = 'clickhouse-round-levels',
+    kafka_format = 'AvroConfluent',
+    format_avro_schema_registry_url = 'http://redpanda:8081',
+    kafka_num_consumers = 1,
+    kafka_flush_interval_ms = 2000;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS ticklab.round_levels_mv TO ticklab.round_levels AS
+SELECT base, tier, kind, level, approach, touch_time, touch_trade_id, decide_second, close,
+       outcome, band
+FROM ticklab.round_levels_queue;

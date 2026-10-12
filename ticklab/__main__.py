@@ -128,6 +128,9 @@ def _parser() -> argparse.ArgumentParser:
     sub = studies.add_parser("lead-lag", help="1-second returns and moves on both exchanges")
     _day_range(sub)
     sub.set_defaults(run=_study_lead_lag)
+    sub = studies.add_parser("round-levels", help="60-second moves and tests of price levels")
+    _day_range(sub)
+    sub.set_defaults(run=_study_round_levels)
     return parser
 
 
@@ -469,6 +472,18 @@ def _study_lead_lag(settings: Settings, args: argparse.Namespace) -> None:
     collected = lead_lag.study(_both_exchanges(settings, args.first, last), lead_lag.GRID)
     print(f"From {args.first} to {last}, UTC.\n")
     print(lead_lag.report(collected, lead_lag.GRID, days=(last - args.first).days + 1))
+
+
+def _study_round_levels(settings: Settings, args: argparse.Namespace) -> None:
+    from ticklab import round_levels
+
+    last = args.last or args.first
+    events = replay.history_trades(
+        settings.history_dir, feeds_for(binance.EXCHANGE), history.days(args.first, last)
+    )
+    collected = round_levels.study(events, round_levels.BAND_GRID)
+    print(f"From {args.first} to {last}, UTC, Binance.\n")
+    print(round_levels.report(collected, round_levels.BAND_GRID, (last - args.first).days + 1))
 
 
 def _study_gaps(settings: Settings, args: argparse.Namespace) -> None:

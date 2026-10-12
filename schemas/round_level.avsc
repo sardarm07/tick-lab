@@ -1,0 +1,54 @@
+{
+  "type": "record",
+  "name": "RoundLevelTest",
+  "namespace": "ticklab.v1",
+  "doc": "One test of a price level: reached from beyond its band, then decided by the close 60 s later. Keyed by base:tier:kind:level:touch_trade_id (decision note 0021).",
+  "fields": [
+    {"name": "base", "type": "string", "doc": "BTC, ETH or SOL, on Binance"},
+    {
+      "name": "tier",
+      "type": {"type": "enum", "name": "LevelTier", "symbols": ["MAJOR", "MINOR"]},
+      "doc": "MAJOR: every 1,000 (BTC), 100 (ETH), 10 (SOL); MINOR: every 100, 10, 1, majors excepted"
+    },
+    {
+      "name": "kind",
+      "type": {"type": "enum", "name": "LevelKind", "symbols": ["ROUND", "RANDOM"]},
+      "doc": "ROUND, or RANDOM: the control, one level drawn in each step of the tier"
+    },
+    {
+      "name": "level",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "In USDT"
+    },
+    {
+      "name": "approach",
+      "type": {"type": "enum", "name": "Approach", "symbols": ["FROM_BELOW", "FROM_ABOVE"]}
+    },
+    {
+      "name": "touch_time",
+      "type": {"type": "long", "logicalType": "timestamp-micros"},
+      "doc": "Trade time of the trade that reached the level"
+    },
+    {"name": "touch_trade_id", "type": "long", "doc": "The trade that reached the level: the test's identity"},
+    {
+      "name": "decide_second",
+      "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "doc": "Start of the second, 60 s after the touch, whose close decides the test"
+    },
+    {
+      "name": "close",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "The last price at the end of that second"
+    },
+    {
+      "name": "outcome",
+      "type": {"type": "enum", "name": "LevelOutcome", "symbols": ["BREAK", "BOUNCE", "NEUTRAL"]},
+      "doc": "BREAK: the close is at least a band beyond the level on the far side; BOUNCE: on the near side"
+    },
+    {
+      "name": "band",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "The pair's band, in USDT"
+    }
+  ]
+}

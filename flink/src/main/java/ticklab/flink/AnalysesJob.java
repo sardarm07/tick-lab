@@ -10,7 +10,7 @@ import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 /**
  * The analyses job: the same trades again, under its own consumer group and deduplicated the
  * same way, into the analyses of milestones 6 to 8. So far: who moves first
- * ({@code analysis-lead-lag}).
+ * ({@code analysis-lead-lag}) and round-number magnets ({@code analysis-round-levels}).
  *
  * <p>Arguments: {@code --bootstrap host:port --registry url --partitions 0,1,2
  * --idleness-seconds 10 --start-at latest|earliest}.
@@ -46,6 +46,10 @@ public final class AnalysesJob {
                 .sinkTo(Sinks.leadLag(bootstrap, registry))
                 .name("lead-lag-sink")
                 .uid("lead-lag-sink");
+        AnalysesPipeline.roundLevels(unique, RoundLevelRules.ROUND_LEVELS)
+                .sinkTo(Sinks.roundLevels(bootstrap, registry))
+                .name("round-levels-sink")
+                .uid("round-levels-sink");
         env.execute("ticklab-analyses");
     }
 }

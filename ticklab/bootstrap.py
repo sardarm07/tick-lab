@@ -32,6 +32,7 @@ OUTPUT_TOPICS = (
     "spread-1s",
     "alerts",
     "analysis-lead-lag",
+    "analysis-round-levels",
 )
 
 
