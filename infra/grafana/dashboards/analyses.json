@@ -1,0 +1,133 @@
+{
+  "uid": "ticklab-analyses",
+  "title": "Analyses",
+  "tags": [
+    "ticklab"
+  ],
+  "description": "What the trades say: who moves first (decision note 0020).",
+  "timezone": "utc",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": false,
+  "refresh": "1m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Who moved first",
+      "description": "Moves of more than the base's threshold within a second (BTC 5, ETH 7, SOL 9 bps), paired across the exchanges when they go the same way within 2 s. Times are each exchange's own, so a difference between their clocks would look like a lead; and the less active market shows a move only at its next trade.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT base AS \"Base\",\n       countIf(lead_us IS NOT NULL) AS \"Pairs\",\n       round(100 * countIf(lead_us > 0 AND leader = 'BINANCE')\n             / nullIf(countIf(lead_us IS NOT NULL), 0), 1) AS \"Binance first (%)\",\n       round(100 * countIf(lead_us > 0 AND leader = 'KRAKEN')\n             / nullIf(countIf(lead_us IS NOT NULL), 0), 1) AS \"Kraken first (%)\",\n       countIf(lead_us = 0) AS \"Ties\",\n       round(medianExactIf(lead_us, lead_us > 0 AND leader = 'BINANCE') / 1000)\n           AS \"Median lead, Binance first (ms)\",\n       round(medianExactIf(lead_us, lead_us > 0 AND leader = 'KRAKEN') / 1000)\n           AS \"Median lead, Kraken first (ms)\",\n       countIf(lead_us IS NULL AND leader = 'BINANCE') AS \"Binance moves not followed\",\n       countIf(lead_us IS NULL AND leader = 'KRAKEN') AS \"Kraken moves not followed\"\nFROM ticklab.lead_lag FINAL\nWHERE $__timeFilter(leader_time)\nGROUP BY base\nORDER BY base"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "How long the second exchange took",
+      "description": "Pairs by how much later the other exchange's move came, by the exchange that moved first.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT base AS \"Base\", leader AS \"First\",\n       countIf(lead_us <= 50000) AS \"up to 50 ms\",\n       countIf(lead_us > 50000 AND lead_us <= 100000) AS \"50-100 ms\",\n       countIf(lead_us > 100000 AND lead_us <= 250000) AS \"100-250 ms\",\n       countIf(lead_us > 250000 AND lead_us <= 500000) AS \"250-500 ms\",\n       countIf(lead_us > 500000 AND lead_us <= 1000000) AS \"0.5-1 s\",\n       countIf(lead_us > 1000000) AS \"1-2 s\"\nFROM ticklab.lead_lag FINAL\nWHERE $__timeFilter(leader_time) AND lead_us > 0\nGROUP BY base, leader\nORDER BY base, leader"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Latest moves",
+      "description": "Newest first. A move with no lead was not followed by the other exchange within 2 s.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "pluginVersion": "4.22.1",
+          "rawSql": "SELECT leader_time AS \"First move\", base AS \"Base\", direction AS \"Direction\",\n       leader AS \"First\", round(lead_us / 1000, 1) AS \"Lead (ms)\",\n       round(leader_bps, 2) AS \"First move (bps)\", round(follower_bps, 2) AS \"Second move (bps)\"\nFROM ticklab.lead_lag FINAL\nWHERE $__timeFilter(leader_time)\nORDER BY leader_time DESC\nLIMIT 50"
+        }
+      ]
+    }
+  ]
+}

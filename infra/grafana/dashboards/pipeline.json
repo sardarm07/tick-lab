@@ -64,7 +64,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Trades read per second, by Flink job",
-      "description": "Records the Kafka source of each job emits. Both jobs read every trade.",
+      "description": "Records the Kafka source of each job emits. Every job reads every trade.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

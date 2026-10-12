@@ -12,6 +12,7 @@ import ticklab.v1.Alert;
 import ticklab.v1.Candle;
 import ticklab.v1.FeedHealth;
 import ticklab.v1.Gap;
+import ticklab.v1.LeadLag;
 import ticklab.v1.Spread;
 import ticklab.v1.Trade;
 
@@ -44,6 +45,10 @@ final class Sinks {
 
     static KafkaSink<Alert> alerts(String bootstrap, String registry) {
         return sink(bootstrap, registry, "alerts", Alert.class, new AlertKey());
+    }
+
+    static KafkaSink<LeadLag> leadLag(String bootstrap, String registry) {
+        return sink(bootstrap, registry, "analysis-lead-lag", LeadLag.class, new LeadLagKey());
     }
 
     private static <T extends SpecificRecord> KafkaSink<T> sink(
@@ -103,6 +108,15 @@ final class Sinks {
         @Override
         public byte[] serialize(Alert alert) {
             return (alert.getType() + ":" + alert.getKey()).getBytes(UTF_8);
+        }
+    }
+
+    /** {@code base:leader:leader_time}: a move leads at most one record. */
+    static final class LeadLagKey implements SerializationSchema<LeadLag> {
+        @Override
+        public byte[] serialize(LeadLag record) {
+            return (record.getBase() + ":" + record.getLeader() + ":" + record.getLeaderTime())
+                    .getBytes(UTF_8);
         }
     }
 

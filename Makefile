@@ -19,12 +19,14 @@ KRAKEN_FIXTURE ?= kraken-2026-10-11T0900-15m
 SEED ?= 7
 # The exchanges a replay or test stack carries; the Flink job reads only their partitions.
 EXCHANGES ?= BINANCE
+# The Flink jobs a replay stack runs; the analyses alone can replay weeks of history.
+JOBS ?= core,signals,analyses
 E2E := $(COMPOSE) -f compose.yaml -f compose.ci.yaml
 
 .PHONY: help up down ps logs console replay-up replay-down replay replay-history \
 	replay-kraken-history replay-drain record history kraken-history study-disorder study-gaps \
-	study-signals reconcile fixture e2e e2e-kraken chaos fail-taskmanager fail-producer \
-	fail-network bench lint test test-java ci check-m1 check-m2 check-m3 check-m4 check-m5 \
+	study-signals study-lead-lag reconcile fixture e2e e2e-kraken chaos fail-taskmanager fail-producer \
+	fail-network bench lint test test-java ci check-m1 check-m2 check-m3 check-m4 check-m5 check-m6 \
 	codespace-network
 
 JAR := flink/target/ticklab-flink.jar
@@ -60,12 +62,13 @@ logs: .env ## Follow the live stack's logs
 console: .env ## Add Redpanda Console to the live stack (http://localhost:8080)
 	$(LIVE) --profile console up -d --wait console
 
-replay-up: .env codespace-network $(JAR) ## Start an empty replay stack with a fresh Flink job
+replay-up: .env codespace-network $(JAR) ## Start an empty replay stack with fresh Flink jobs [JOBS=analyses]
 	@if [ -n "$$($(LIVE) ps -q)" ]; then echo "The live stack is running: make down"; exit 1; fi
 	$(REPLAY) --profile replay down -v
 	rm -f data/flink/replay/*.savepoint
 	$(REPLAY) --profile replay up -d --build --wait
-	TICKLAB_EXCHANGES=$(EXCHANGES) TICKLAB_STACK=replay $(UV_ENV) python -m ticklab flink start
+	TICKLAB_EXCHANGES=$(EXCHANGES) TICKLAB_JOBS=$(JOBS) TICKLAB_STACK=replay \
+		$(UV_ENV) python -m ticklab flink start
 
 replay-drain: .env ## End a replay: Flink drains, so every remaining window fires
 	TICKLAB_STACK=replay $(UV_ENV) python -m ticklab flink drain
@@ -104,6 +107,9 @@ study-disorder: .env ## Arrival disorder in recordings: make study-disorder FROM
 study-signals: .env ## Spreads, moves and volumes behind the alert thresholds: make study-signals FROM=2026-10-04 TO=2026-10-10
 	$(UV_ENV) python -m ticklab study signals --from $(FROM) --to $(TO)
 
+study-lead-lag: .env ## 1-second returns and moves behind the lead-lag thresholds: make study-lead-lag FROM=2026-10-04 TO=2026-10-10
+	$(UV_ENV) python -m ticklab study lead-lag --from $(FROM) --to $(TO)
+
 study-gaps: .env ## Gaps between trades in history: make study-gaps FROM=2026-10-03 TO=2026-10-09 [EXCHANGE=kraken]
 	$(UV_ENV) python -m ticklab study gaps --from $(FROM) --to $(TO) \
 		--exchange $(or $(EXCHANGE),binance)
@@ -138,7 +144,8 @@ e2e-kraken: .env ## The end-to-end test on the Kraken fixture: Kraken's gap repa
 # The busiest hour of the history, replayed into an empty replay stack sized by the profile.
 # The stack stays up afterwards for its dashboards; `make replay-down` removes it.
 PROFILE ?= lite
-SPEED ?= 10
+# Only the benchmark has a default speed: replays without one run as fast as they can.
+bench: SPEED ?= 10
 
 bench: .env codespace-network $(JAR) | data/history ## Benchmark: the busiest hour, replayed: make bench SPEED=1|10|100 PROFILE=lite|full
 	$(MAKE) replay-up SIZE=$(PROFILE) EXCHANGES=BINANCE,KRAKEN
@@ -199,3 +206,6 @@ check-m4: .env | data/recordings data/history ## The M4 checks (about 5 hours)
 
 check-m5: .env | data/history ## The M5 checks for one profile: make check-m5 PROFILE=lite|full
 	$(UV_ENV) python -m ticklab.checks.m5 --profile $(PROFILE)
+
+check-m6: .env | data/history ## The M6 checks: a week of history through the analyses job (about 2 hours)
+	$(UV_ENV) python -m ticklab.checks.m6

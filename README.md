@@ -6,7 +6,7 @@ Trades from Binance and Kraken flow through Python producers into Redpanda, are 
 Flink, stored in ClickHouse and shown in Grafana. Every number the pipeline produces is checked
 against the exchanges' own figures.
 
-**Status:** work in progress. Milestones 1 to 5 are done:
+**Status:** work in progress. Milestones 1 to 6 are done:
 
 - live Binance trades are normalised, published as Avro, stored in ClickHouse, recorded raw,
   and can be replayed exactly;
@@ -23,7 +23,9 @@ against the exchanges' own figures.
   joins), and raises alerts for divergences, price moves and volume spikes;
 - the busiest hour of the history, replayed at 1, 10 and 100 times real time on a 2-core and a
   4-core machine, measures throughput, consumer lag and latency, which a "Pipeline" dashboard
-  also shows live.
+  also shows live;
+- a third Flink job finds sharp 1-second price moves on each exchange and pairs them across the
+  two, to see which exchange moves first.
 
 ## How it fits together
 
@@ -43,14 +45,17 @@ flowchart LR
   REC -. replay .-> T
   T --> CORE[Flink core job: deduplication, gaps, 1-minute candles, feed health]
   T --> SIG[Flink signals job: 1-second bars, spreads, alerts]
+  T --> ANA[Flink analyses job: who moves first]
   CORE --> OUT[[candles, gaps, feed-health, late-trades]]
   SIG --> OUT2[[spread-1s, alerts]]
+  ANA --> OUT3[[analysis-lead-lag]]
   OUT -- gaps --> GR[gap repair]
   REST --> GR
   GR --> T
   T --> CH[(ClickHouse)]
   OUT --> CH
   OUT2 --> CH
+  OUT3 --> CH
   REST --> RC[reconciler]
   RC --> CH
   CH --> GF[Grafana]
@@ -58,10 +63,11 @@ flowchart LR
 ```
 
 Producers normalise each exchange's trades into one Avro schema, one Kafka partition per feed.
-Two Flink jobs read every trade: the core job removes duplicates, finds gaps (which gap repair
+Three Flink jobs read every trade: the core job removes duplicates, finds gaps (which gap repair
 fills from the exchange's REST API) and builds 1-minute candles; the signals job compares the
-two exchanges every second. ClickHouse stores everything, idempotently, and the reconciler
-checks every minute against the exchange's own candles.
+two exchanges every second; the analyses job finds price moves on each exchange and pairs them
+across the two. ClickHouse stores everything, idempotently, and the reconciler checks every
+minute against the exchange's own candles.
 
 ## Results
 
@@ -125,6 +131,25 @@ so candles come out about 10 s after their minute, and a quiet feed's output lat
 the rest of the minute after its last trade. Kraken's feed latency is negative because its clock
 was ahead of this machine's.
 
+### Who moves first
+
+A week of both exchanges (2026-10-04 to 10, 40 million trades), replayed through the analyses job
+(`make check-m6`). A move is a second whose close is more than a threshold away from the one
+before (BTC 5, ETH 7, SOL 9 bps: Binance's 99.9th percentile of 1-second moves), timed by its
+first trade beyond the threshold. Moves of the two exchanges in the same direction within 2 s
+are paired, and the earlier one leads (decision note 0020). Every row the job produced equals a
+plain-Python recomputation from the same history.
+
+| Base | Pairs | Binance first | 95% interval | Median lead, Binance first | Kraken first | Moves not followed, Binance / Kraken |
+|---|---:|---:|---:|---:|---:|---:|
+| BTC | 120 | 79% | 71% to 85% | 263 ms | 473 ms | 156 / 138 |
+| ETH | 194 | 84% | 78% to 88% | 271 ms | 584 ms | 173 / 232 |
+| SOL | 128 | 88% | 81% to 92% | 250 ms | 239 ms | 133 / 204 |
+
+Binance moved first in four pairs out of five, about a quarter of a second ahead, and the
+pattern holds for every threshold from 2 to 20 bps (docs/data-study.md). More than half of all
+moves weren't matched by the other exchange within 2 s at all.
+
 ## Limitations
 
 - **One machine, one hour.** The benchmarks describe a GitHub codespace replaying one busy hour
@@ -132,6 +157,9 @@ was ahead of this machine's.
 - **Two clocks.** Feed latency subtracts an exchange's timestamp from our clock, so it includes
   the offset between them, which changes with the machine: Kraken's median was 0.3 s in one
   session and −23 ms in another.
+- **Leads are measured on the exchanges' clocks.** A difference between Binance's and Kraken's
+  clocks would look exactly like a lead, and Kraken, which trades far less often, can show a
+  move only at its next trade. The leads are evidence of where prices move first, not proof.
 - **One watermark per job.** A minute's candles wait for the quietest of the seven feeds: live,
   until it trades past the minute or has been silent for 10 s. A busy pair's candle can wait on
   a quiet one.
@@ -158,9 +186,9 @@ make ps        # containers and their health
 make down      # stop; Flink saves its state first, and `make up` resumes from it
 ```
 
-Grafana is on http://localhost:3000 (dashboards "Feed health", "Correctness", "Market" and
-"Pipeline"), the Flink web UI on :8081, Prometheus on :9090 and ClickHouse's HTTP interface on
-:8123. All ports are bound to 127.0.0.1.
+Grafana is on http://localhost:3000 (dashboards "Feed health", "Correctness", "Market",
+"Pipeline" and "Analyses"), the Flink web UI on :8081, Prometheus on :9090 and ClickHouse's HTTP
+interface on :8123. All ports are bound to 127.0.0.1.
 
 Other targets (`make help` lists them all):
 
@@ -169,16 +197,17 @@ Other targets (`make help` lists them all):
 | `make record [EXCHANGE=kraken]` | Records live frames without Docker or Kafka |
 | `make history FROM=2026-10-09` | Downloads Binance's daily trade files and checks them |
 | `make kraken-history FROM=… TO=…` | Downloads Kraken's trades for a time range and checks them |
-| `make replay-up`, `make replay FROM=… TO=…` | Replays recordings into a separate, empty stack |
+| `make replay-up [JOBS=analyses]`, `make replay FROM=… TO=…` | Replays recordings into a separate, empty stack |
 | `make replay-history FROM=…`, `make replay-kraken-history FROM=… TO=…` | Replays history the same way |
 | `make replay-drain` | Ends a replay: every remaining window fires |
 | `make reconcile FROM=… TO=…` | Compares candles with the exchanges' official ones, minute by minute |
 | `make study-signals FROM=… TO=…` | The distributions behind the alert thresholds |
+| `make study-lead-lag FROM=… TO=…` | The 1-second moves behind the lead-lag thresholds |
 | `make bench SPEED=10 PROFILE=lite` | Replays the busiest hour at 1, 10 or 100 times real time and measures it |
 | `make e2e`, `make e2e-kraken`, `make chaos SEED=11` | The end-to-end tests: a fixture with chaos through a throwaway stack |
 | `make fail-taskmanager`, `fail-producer`, `fail-network` [`PRODUCER=kraken`] | Failures to inject into the live stack |
 | `make ci` | Lint, Python and Java tests and the end-to-end test, as GitHub Actions runs them |
-| `make check-m1` … `make check-m5` | Each milestone's checks, with their evidence |
+| `make check-m1` … `make check-m6` | Each milestone's checks, with their evidence |
 
 Settings live in `.env`, created from `.env.example` on first use. Nothing in it is secret.
 

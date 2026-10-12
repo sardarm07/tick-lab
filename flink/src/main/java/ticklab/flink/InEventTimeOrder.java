@@ -55,12 +55,20 @@ abstract class InEventTimeOrder<K, I, O> extends KeyedProcessFunction<K, I, O> {
         List<I> due = waiting.get(time);
         if (due != null) {
             waiting.remove(time);
-            for (I value : due) {
+            List<I> ordered = new ArrayList<>(due);
+            order(ordered);
+            for (I value : ordered) {
                 onEvent(value, time, context, out);
             }
         }
         onTime(time, context, out);
     }
+
+    /**
+     * Puts the elements of one instant in the order to handle them. They stay in arrival order
+     * unless a subclass sorts them: needed when two inputs can arrive in either order.
+     */
+    void order(List<I> sameInstant) {}
 
     /** One element, at its event time; the watermark has passed it. */
     abstract void onEvent(I value, long time, OnTimerContext context, Collector<O> out)

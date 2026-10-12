@@ -1,0 +1,50 @@
+{
+  "type": "record",
+  "name": "LeadLag",
+  "namespace": "ticklab.v1",
+  "doc": "Who moved first: a price move on one exchange paired with the same move on the other, or a move the other exchange didn't follow within the window. Keyed by base:leader:leader_time (decision note 0020).",
+  "fields": [
+    {"name": "base", "type": "string", "doc": "BTC, ETH or SOL"},
+    {
+      "name": "direction",
+      "type": {"type": "enum", "name": "Direction", "symbols": ["UP", "DOWN"]}
+    },
+    {
+      "name": "leader",
+      "type": "ticklab.v1.Exchange",
+      "doc": "The exchange whose move came first; for an unpaired move, the exchange that moved"
+    },
+    {
+      "name": "leader_time",
+      "type": {"type": "long", "logicalType": "timestamp-micros"},
+      "doc": "Trade time, on the leader's own clock, of its first trade beyond the threshold"
+    },
+    {
+      "name": "leader_bps",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "The leader's second: its close against its reference, in bps, rounded half-even to 12 places"
+    },
+    {
+      "name": "follower_time",
+      "type": ["null", {"type": "long", "logicalType": "timestamp-micros"}],
+      "default": null,
+      "doc": "The other exchange's move, when paired; on its own clock"
+    },
+    {
+      "name": "follower_bps",
+      "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12}],
+      "default": null
+    },
+    {
+      "name": "lead_us",
+      "type": ["null", "long"],
+      "default": null,
+      "doc": "follower_time - leader_time, when paired: 0 is a tie"
+    },
+    {
+      "name": "threshold_bps",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 28, "scale": 12},
+      "doc": "The base's threshold for a move, when this was found"
+    }
+  ]
+}

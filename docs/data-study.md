@@ -177,3 +177,55 @@ The alert thresholds chosen from these tables, and why, are in decision note 001
 above 2 bps for 30 s, moves of 8 times the typical one, and volume spikes of 20 times on
 Binance and 50 times on Kraken.
 
+
+## Who moves first: 1-second moves on both exchanges (milestone 6)
+
+`make study-lead-lag FROM=2026-10-04 TO=2026-10-10` reads both exchanges' history for the week
+and applies the analysis's definitions in plain Python (`ticklab/lead_lag.py`): each feed's
+second against its reference, the close of its previous second with trades if that is at most
+10 s old, then the moves at a grid of thresholds, paired across the exchanges within 2 s.
+
+| Exchange:base | Seconds | p50 | p90 | p99 | p99.9 | p99.99 | Bounce p50 | Bounce p90 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| BINANCE:BTC | 541,270 | 0.00 | 0.38 | 1.94 | 4.11 | 7.80 | 0.00 | 0.00 |
+| BINANCE:ETH | 422,596 | 0.04 | 0.89 | 2.75 | 6.63 | 14.82 | 0.04 | 0.04 |
+| BINANCE:SOL | 353,970 | 0.83 | 1.65 | 3.65 | 8.14 | 15.57 | 0.85 | 0.91 |
+| KRAKEN:BTC | 242,191 | 0.01 | 0.99 | 2.55 | 5.10 | 9.18 | 0.01 | 0.40 |
+| KRAKEN:ETH | 142,598 | 0.24 | 1.80 | 4.59 | 10.67 | 26.37 | 0.08 | 1.54 |
+| KRAKEN:SOL | 134,773 | 0.84 | 2.59 | 6.02 | 11.03 | 20.40 | 0.88 | 2.51 |
+
+Returns: |close against the reference| of each second with a fresh reference, in bps. Bounce:
+|price step| between consecutive trades taken from opposite sides of the book, in bps, about
+the bid-ask spread.
+
+- Binance's BTC moves in ticks of 0.01 USDT, about 0.001 bps of its price, so its bounce rounds
+  to 0. SOL's tick is about 0.9 bps of its price, and its bounce is about one tick on both
+  exchanges.
+- Kraken's returns have fatter tails: it trades less, so its reference is often a few seconds
+  old, and a second's move gathers what happened since.
+
+Moves and pairs a day, for a grid of thresholds:
+
+| Base | Threshold (bps) | Binance moves | Kraken moves | Pairs | Led by Binance | Led by Kraken | Ties | Median lead, Binance first (ms) | Kraken first (ms) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| BTC | 2 | 716.4 | 729.4 | 383.3 | 84% | 16% | 0 | 300 | 328 |
+| BTC | 3 | 219.6 | 212.1 | 108.3 | 83% | 17% | 0 | 305 | 352 |
+| BTC | 5 | 39.4 | 36.9 | 17.1 | 79% | 21% | 0 | 263 | 473 |
+| BTC | 8 | 6.9 | 6.6 | 3.1 | 77% | 23% | 0 | 422 | 382 |
+| BTC | 10 | 4.1 | 2.9 | 1.4 | 90% | 10% | 0 | 494 | 635 |
+| ETH | 3 | 478.4 | 616.6 | 255.0 | 79% | 21% | 0 | 268 | 469 |
+| ETH | 5 | 120.9 | 156.7 | 66.1 | 80% | 20% | 0 | 271 | 541 |
+| ETH | 7 | 52.4 | 60.9 | 27.7 | 84% | 16% | 0 | 271 | 584 |
+| ETH | 10 | 18.9 | 23.3 | 10.3 | 82% | 18% | 0 | 307 | 272 |
+| ETH | 15 | 5.9 | 8.0 | 3.6 | 88% | 12% | 0 | 387 | 368 |
+| SOL | 5 | 194.7 | 350.4 | 103.6 | 82% | 18% | 0 | 210 | 485 |
+| SOL | 8 | 51.3 | 71.9 | 27.0 | 84% | 16% | 0 | 209 | 462 |
+| SOL | 9 | 37.3 | 47.4 | 18.3 | 88% | 12% | 0 | 250 | 239 |
+| SOL | 15 | 5.7 | 4.6 | 2.3 | 88% | 12% | 0 | 170 | 619 |
+| SOL | 20 | 1.6 | 2.1 | 0.9 | 83% | 17% | 0 | 214 | 3 |
+
+- Whatever the threshold, Binance moved first in about four pairs out of five (77% to 90%),
+  and when it did, the median lead was 0.2 to 0.5 s.
+- The thresholds: Binance's 99.9th percentile, rounded up to a whole basis point, so BTC 5, ETH
+  7 and SOL 9 bps (decision note 0020). Each is at least 3.6 times the 90th percentile of the
+  noisier exchange's bounce.

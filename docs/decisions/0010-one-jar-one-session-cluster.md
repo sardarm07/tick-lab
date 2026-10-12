@@ -10,11 +10,17 @@ or several jobs in one long-running cluster (session mode).
 
 ## Decision
 
-- **One session cluster:** a JobManager (640 MB) and a TaskManager (1,300 MB, two slots), with
+- **One session cluster:** a JobManager (740 MB) and a TaskManager (1,300 MB), with
   in-memory (HashMap) state and a checkpoint every 10 s to a Docker volume (`compose.yaml`).
-  The TaskManager has managed memory (64 MB lite, 256 MB full), which Flink SQL's window
+  Jobs never share a slot, so the TaskManager has one slot per job and parallel task: 3 on the
+  lite profile (core, signals, analyses), 6 on the full one at parallelism 2. It has managed
+  memory (96 MB lite, 256 MB full, split evenly between the slots), which Flink SQL's window
   aggregations need for their buffers (the signals job, milestone 4); the DataStream jobs use
   none.
+- **Metaspace sized by measurement** (milestone 6): the JobManager loads every submitted job's
+  jar, and the signals job's SQL planner, into the JVM's metaspace. With the third job it
+  reached 163 MiB, past its 160 MB, and the JobManager died. It now has 256 MB; the TaskManager
+  used 111 MiB of its 192 MB (`config/sizing/`).
 - **One jar** (`flink/`, built by Maven) holding all jobs. Classes are generated from the same
   Avro schemas the Python side uses (`schemas/`). The Kafka connector, Avro and the schema
   registry client are bundled into it; Flink itself is not.
@@ -26,7 +32,8 @@ or several jobs in one long-running cluster (session mode).
 
 ## Consequences
 
-- One JVM pair for all jobs fits the memory budget; jobs share the TaskManager's slots.
+- One JVM pair for all jobs fits the memory budget; the jobs share the TaskManager, each in
+  slots of its own.
 - A JobManager crash takes all jobs down; there is no high availability. Restarting resumes from
   the last savepoint, or from Kafka's committed offsets.
 - `confluent` is the one Maven repository outside Maven Central, for the schema registry client.

@@ -1,7 +1,7 @@
 """Controls the Flink jobs through Flink's REST API.
 
-There are two jobs, `core` (candles, gaps, feed health) and `signals` (spreads and alerts),
-in one jar on one session cluster.
+There are three jobs, `core` (candles, gaps, feed health), `signals` (spreads and alerts) and
+`analyses` (who moves first), in one jar on one session cluster.
 
 - `start` submits a job unless it is running, resuming from the stack's last savepoint of that
   job when there is one, so `make down` and `make up` lose no state. Flink matches saved state
@@ -43,7 +43,8 @@ CORE = Job("core", "ticklab-core", "ticklab.flink.CoreJob")
 SIGNALS = Job(
     "signals", "ticklab-signals", "ticklab.flink.SignalsJob", allow_non_restored_state=True
 )
-JOBS = (CORE, SIGNALS)
+ANALYSES = Job("analyses", "ticklab-analyses", "ticklab.flink.AnalysesJob")
+JOBS = (CORE, SIGNALS, ANALYSES)
 JAR = ROOT / "flink" / "target" / "ticklab-flink.jar"
 SAVEPOINTS = "file:///flink-data/savepoints"
 

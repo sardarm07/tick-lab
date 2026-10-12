@@ -19,15 +19,29 @@ log = logging.getLogger(__name__)
 
 SQL_DIR = ROOT / "infra" / "clickhouse" / "sql"
 TRADES_RETENTION_MS = 24 * 3600 * 1000
+# A replay publishes history far faster than it happened: a week of both exchanges in about 35
+# minutes, some 4 GB in Redpanda. Its consumers keep up within seconds, so ten minutes of it is
+# plenty to keep, and the disk doesn't fill (milestone 6).
+REPLAY_TRADES_RETENTION_MS = 10 * 60 * 1000
 # Topics the Flink jobs write to; one partition each is plenty for a few rows a second.
-OUTPUT_TOPICS = ("candles", "late-trades", "gaps", "feed-health", "spread-1s", "alerts")
+OUTPUT_TOPICS = (
+    "candles",
+    "late-trades",
+    "gaps",
+    "feed-health",
+    "spread-1s",
+    "alerts",
+    "analysis-lead-lag",
+)
 
 
 def run(settings: Settings) -> None:
     partitions = len(load_feeds())
-    ensure_topic(settings, settings.trades_topic, partitions)
+    replay = settings.stack == "replay"
+    retention = REPLAY_TRADES_RETENTION_MS if replay else TRADES_RETENTION_MS
+    ensure_topic(settings, settings.trades_topic, partitions, retention)
     for topic in OUTPUT_TOPICS:
-        ensure_topic(settings, topic, 1)
+        ensure_topic(settings, topic, 1, TRADES_RETENTION_MS)
     schema_text, _ = avro.load_schema()
     topic_subject = avro.subject(settings.trades_topic)
     schema_id = avro.register(settings.schema_registry_url, topic_subject, schema_text)
@@ -35,7 +49,7 @@ def run(settings: Settings) -> None:
     apply_sql(ClickHouse(settings), settings.stack)
 
 
-def ensure_topic(settings: Settings, topic: str, partitions: int) -> None:
+def ensure_topic(settings: Settings, topic: str, partitions: int, retention_ms: int) -> None:
     admin = AdminClient({"bootstrap.servers": settings.kafka_bootstrap})
     metadata = admin.list_topics(timeout=30)
     existing = metadata.topics.get(topic)
@@ -44,7 +58,7 @@ def ensure_topic(settings: Settings, topic: str, partitions: int) -> None:
             topic,
             num_partitions=partitions,
             replication_factor=1,
-            config={"retention.ms": str(TRADES_RETENTION_MS), "cleanup.policy": "delete"},
+            config={"retention.ms": str(retention_ms), "cleanup.policy": "delete"},
         )
         admin.create_topics([new])[topic].result()
         log.info("created topic %s with %d partitions", topic, partitions)

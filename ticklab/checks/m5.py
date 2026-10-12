@@ -88,35 +88,15 @@ def check_dashboards(report: Report) -> None:
         job = row["metric"].get("job", "?")
         up[job] = min(up.get(job, 1.0), float(row["value"][1]))
     unscraped = [job for job in SCRAPED if up.get(job) != 1.0]
-    auth = ("admin", read_env("GRAFANA_ADMIN_PASSWORD", "admin"))
     failed, empty, no_rows = [], [], []
     count = 0
     for path in sorted(DASHBOARDS.glob("*.json")):
         dashboard = json.loads(path.read_text())
-        variables = {
-            v["name"]: v["current"]["value"]
-            for v in dashboard.get("templating", {}).get("list", [])
-        }
         for panel in dashboard["panels"]:
             name = f"{dashboard['title']}: {panel['title']}"
-            points = 0
-            for target in panel["targets"]:
-                count += 1
-                query = dict(target, intervalMs=10_000, maxDataPoints=100)
-                if "rawSql" in query:
-                    for variable, value in variables.items():
-                        query["rawSql"] = query["rawSql"].replace("${" + variable + "}", value)
-                body = {"from": "now-15m", "to": "now", "queries": [query]}
-                response = httpx.post(f"{GRAFANA_URL}/api/ds/query", json=body, auth=auth)
-                result = response.json().get("results", {}).get(target["refId"], {})
-                points += sum(
-                    len(frame["data"]["values"][0])
-                    for frame in result.get("frames", [])
-                    if frame["data"]["values"]
-                )
-                if response.status_code != 200 or result.get("error"):
-                    error = result.get("error") or response.status_code
-                    failed.append(f"{name} [{target['refId']}]: {error}")
+            count += len(panel["targets"])
+            points, errors = panel_data(dashboard, panel, "now-15m", "now")
+            failed += [f"{name} {error}" for error in errors]
             if points == 0:
                 (no_rows if panel["type"] == "table" else empty).append(name)
     for job in unscraped:
@@ -132,6 +112,33 @@ def check_dashboards(report: Report) -> None:
         not unscraped and not failed and not empty,
         f"({len(SCRAPED)} services, {count} queries, {len(no_rows)} empty event tables)",
     )
+
+
+def panel_data(dashboard: dict, panel: dict, start: str, end: str) -> tuple[int, list[str]]:
+    """The points a panel's queries return through Grafana's own query API, between `start` and
+    `end` (Grafana's time strings, such as now-15m or milliseconds since the epoch), and the
+    errors of those that fail."""
+    auth = ("admin", read_env("GRAFANA_ADMIN_PASSWORD", "admin"))
+    variables = {
+        v["name"]: v["current"]["value"] for v in dashboard.get("templating", {}).get("list", [])
+    }
+    points, errors = 0, []
+    for target in panel["targets"]:
+        query = dict(target, intervalMs=10_000, maxDataPoints=100)
+        if "rawSql" in query:
+            for variable, value in variables.items():
+                query["rawSql"] = query["rawSql"].replace("${" + variable + "}", value)
+        body = {"from": start, "to": end, "queries": [query]}
+        response = httpx.post(f"{GRAFANA_URL}/api/ds/query", json=body, auth=auth, timeout=60)
+        result = response.json().get("results", {}).get(target["refId"], {})
+        points += sum(
+            len(frame["data"]["values"][0])
+            for frame in result.get("frames", [])
+            if frame["data"]["values"]
+        )
+        if response.status_code != 200 or result.get("error"):
+            errors.append(f"[{target['refId']}]: {result.get('error') or response.status_code}")
+    return points, errors
 
 
 def read_env(name: str, default: str) -> str:

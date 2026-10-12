@@ -33,12 +33,12 @@ x-flink: &flink
     FLINK_PROPERTIES: |
       jobmanager.rpc.address: flink-jobmanager
       jobmanager.memory.process.size: ${FLINK_JM_PROCESS}
-      jobmanager.memory.jvm-metaspace.size: 160m
+      jobmanager.memory.jvm-metaspace.size: ${FLINK_JM_METASPACE}
       jobmanager.memory.jvm-overhead.min: 96m
       jobmanager.memory.off-heap.size: 64m
       taskmanager.memory.process.size: ${FLINK_TM_PROCESS}
       taskmanager.memory.managed.size: ${FLINK_TM_MANAGED}
-      taskmanager.memory.jvm-metaspace.size: 192m
+      taskmanager.memory.jvm-metaspace.size: ${FLINK_TM_METASPACE}
       taskmanager.memory.jvm-overhead.min: 128m
       taskmanager.numberOfTaskSlots: ${FLINK_TM_SLOTS}
       parallelism.default: ${FLINK_PARALLELISM}

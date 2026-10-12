@@ -78,6 +78,7 @@ class Settings:
     metrics_port: int
     stack: str
     exchanges: tuple[str, ...]  # the exchanges this stack carries
+    jobs: tuple[str, ...]  # the Flink jobs `flink start` starts
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -104,4 +105,5 @@ class Settings:
             metrics_port=int(env("METRICS_PORT", "8000")),
             stack=env("TICKLAB_STACK", "live"),
             exchanges=tuple(env("TICKLAB_EXCHANGES", "BINANCE,KRAKEN").split(",")),
+            jobs=tuple(env("TICKLAB_JOBS", "core,signals,analyses").split(",")),
         )

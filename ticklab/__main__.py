@@ -125,6 +125,9 @@ def _parser() -> argparse.ArgumentParser:
     sub = studies.add_parser("signals", help="spreads, moves and volumes behind the alerts")
     _day_range(sub)
     sub.set_defaults(run=_study_signals)
+    sub = studies.add_parser("lead-lag", help="1-second returns and moves on both exchanges")
+    _day_range(sub)
+    sub.set_defaults(run=_study_lead_lag)
     return parser
 
 
@@ -309,7 +312,7 @@ def _replay_kraken_history(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def _flink(settings: Settings, args: argparse.Namespace) -> None:
-    from ticklab.flinkctl import CORE, JOBS, SIGNALS, Flink
+    from ticklab.flinkctl import ANALYSES, CORE, JOBS, SIGNALS, Flink
 
     flink = Flink(stack=settings.stack)
     if args.action == "start":
@@ -327,11 +330,18 @@ def _flink(settings: Settings, args: argparse.Namespace) -> None:
             "http://redpanda:8081",
         ]
         silence = ",".join(f"{f.exchange}:{f.symbol}={f.silence_s}" for f in feeds)
-        flink.start(CORE, [*common, "--silence", silence])
-        # Live signals start at the newest trade the first time: a day of backlog would only
-        # be worked through for nothing. Replay and test stacks start empty, so from the start.
+        # Live signals and analyses start at the newest trade the first time: a day of backlog
+        # would only be worked through for nothing. Replay and test stacks start empty, so from
+        # the start.
         start_at = "latest" if settings.stack == "live" else "earliest"
-        flink.start(SIGNALS, [*common, "--start-at", start_at])
+        arguments = {
+            CORE: [*common, "--silence", silence],
+            SIGNALS: [*common, "--start-at", start_at],
+            ANALYSES: [*common, "--start-at", start_at],
+        }
+        for job in JOBS:
+            if job.key in settings.jobs:  # TICKLAB_JOBS, default all
+                flink.start(job, arguments[job])
     elif args.action in ("stop", "drain"):
         for job in reversed(JOBS):
             flink.stop(job, drain=args.action == "drain")
@@ -435,17 +445,30 @@ def _study_signals(settings: Settings, args: argparse.Namespace) -> None:
     from ticklab import signal_study
 
     last = args.last or args.first
-    start = datetime.combine(args.first, datetime.min.time(), UTC)
+    collected = signal_study.collect(_both_exchanges(settings, args.first, last))
+    print(f"From {args.first} to {last}, UTC.\n")
+    print(signal_study.report(collected, days=(last - args.first).days + 1))
+
+
+def _both_exchanges(settings: Settings, first: date, last: date) -> Iterator[tuple[int, Trade]]:
+    """Both exchanges' history for whole days, merged by trade time."""
+    start = datetime.combine(first, datetime.min.time(), UTC)
     end = datetime.combine(last + timedelta(days=1), datetime.min.time(), UTC)
-    events = replay.merged(
+    return replay.merged(
         replay.history_trades(
-            settings.history_dir, feeds_for(binance.EXCHANGE), history.days(args.first, last)
+            settings.history_dir, feeds_for(binance.EXCHANGE), history.days(first, last)
         ),
         replay.kraken_history_trades(settings.history_dir, feeds_for(kraken.EXCHANGE), start, end),
     )
-    collected = signal_study.collect(events)
+
+
+def _study_lead_lag(settings: Settings, args: argparse.Namespace) -> None:
+    from ticklab import lead_lag
+
+    last = args.last or args.first
+    collected = lead_lag.study(_both_exchanges(settings, args.first, last), lead_lag.GRID)
     print(f"From {args.first} to {last}, UTC.\n")
-    print(signal_study.report(collected, days=(end - start).days))
+    print(lead_lag.report(collected, lead_lag.GRID, days=(last - args.first).days + 1))
 
 
 def _study_gaps(settings: Settings, args: argparse.Namespace) -> None:

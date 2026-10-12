@@ -434,3 +434,59 @@ only once the gap's outcome is reported (`enable.auto.offset.store` off, then `s
 the same at-least-once rule as Flink's checkpoints, where input counts as read only once its
 results are safe. A gap too large to repair within the candles' lateness budget is reported
 FAILED at once, with its size (decision note 0011).
+
+## Milestone 6: who moves first
+
+### Turning prices into events
+
+"Does Binance move before Kraken?" needs events to compare, not two price series. A *move* is a
+feed's second whose close is more than a threshold away from the close of its previous second
+with trades (`MoveDetector.java`). The threshold comes from the data: Binance's 99.9th
+percentile of 1-second moves, well above the *bid-ask bounce*, the step a price takes when a buy
+at the ask follows a sell at the bid, which is noise rather than news (docs/data-study.md).
+
+Seconds would be too coarse a clock: most leads would read as zero. So each move is timed by
+the first trade of its second already beyond the threshold, to the microsecond: the moment that
+exchange's price first showed it.
+
+### Pairing events in event time
+
+A move on one exchange pairs with the earliest unpaired move of the other in the same direction
+at most 2 s before it (`LeadLagMatcher.java`). That needs the moves in event-time order, which
+`InEventTimeOrder` already provides, with one addition: moves of the same second carry the same
+Flink timestamp, the end of that second's window, and they arrive in whatever order the two
+feeds' windows fired. Sorting them by their own times, then by exchange, makes the result the
+same however the input is delivered. A move that no move can reach any more is reported
+unpaired by a timer at the end of the second in which its 2 s window closes.
+
+### One definition, written twice
+
+The same definitions exist in Java, in the job, and in plain Python (`ticklab/lead_lag.py`), and
+`make check-m6` requires every row from the job to equal the Python result over a whole week.
+That only works if nothing is left to chance: exact decimals with the same rounding (half-even
+at 12 places) on both sides, the close chosen by trade ID rather than arrival, and a fixed order
+for events at the same instant. Over a week of 40 million trades the two agreed on all 1,478
+pairs and unpaired moves, which is far more convincing than either one tested alone.
+
+### What a lead can't tell you
+
+Each exchange stamps its trades with its own clock, so a difference between the clocks would
+look exactly like a lead; the trades alone can't reveal it. And a market that trades less shows
+a move only at its next trade: Kraken trades a fraction as often as Binance, so it tends to look
+like the follower even when both prices changed together. A lead is evidence of where prices
+are discovered, not proof of it.
+
+### Slots and metaspace: what jobs share
+
+A Flink job runs its tasks in *slots* of the TaskManager. The tasks of one job can share a slot,
+but two jobs never do, so a third job needed a third slot (six on the full profile, at
+parallelism 2). Managed memory is split evenly between the slots, so it grew to keep each
+slot's share (`config/sizing/`).
+
+The third job also brought the JobManager down, the first time the end-to-end test ran with it.
+A job submitted through the REST API runs its main method in the JobManager, which loads the
+job's jar in a class loader of its own: the Kafka connector, Avro and, for the signals job, the
+whole SQL planner. Classes live outside the heap, in the JVM's *metaspace*. Three jobs needed 163
+MiB of the 160 MB it had: `OutOfMemoryError: Metaspace`, the JobManager restarted, and a
+JobManager without high availability comes back with no jobs at all. Measuring each job's share
+gave the new size, 256 MB (decision note 0010).
