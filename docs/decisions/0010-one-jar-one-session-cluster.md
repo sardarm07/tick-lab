@@ -12,8 +12,9 @@ or several jobs in one long-running cluster (session mode).
 
 - **One session cluster:** a JobManager (640 MB) and a TaskManager (1,300 MB, two slots), with
   in-memory (HashMap) state and a checkpoint every 10 s to a Docker volume (`compose.yaml`).
-  The TaskManager has 64 MB of managed memory, which Flink SQL's window aggregations need for
-  their buffers (the signals job, milestone 4); the DataStream jobs use none.
+  The TaskManager has managed memory (64 MB lite, 256 MB full), which Flink SQL's window
+  aggregations need for their buffers (the signals job, milestone 4); the DataStream jobs use
+  none.
 - **One jar** (`flink/`, built by Maven) holding all jobs. Classes are generated from the same
   Avro schemas the Python side uses (`schemas/`). The Kafka connector, Avro and the schema
   registry client are bundled into it; Flink itself is not.

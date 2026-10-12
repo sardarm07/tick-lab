@@ -15,6 +15,8 @@ public class CandleAccumulator {
     public BigDecimal quoteVolume = Decimals.ZERO;
     public BigDecimal takerBuyVolume = Decimals.ZERO;
     public BigDecimal takerBuyQuoteVolume = Decimals.ZERO;
+    /** Kafka timestamp of the newest trade in the candle, for its output latency. */
+    public long newestPublishedMillis;
 
     public CandleAccumulator() {}
 }

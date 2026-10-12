@@ -270,8 +270,8 @@ what a field is called, not always what it means.
 Binance can return trades from an ID, so repairing a gap is a lookup. Kraken pages by time:
 "trades since t". Gap repair therefore turns the gap into a time, from the trade just before it
 that is already in ClickHouse, and pages forward until it is past the gap. `since` is
-inclusive, so consecutive pages share a trade; collecting trades by ID makes the overlap
-harmless (`kraken_rest.trades_between_ids`).
+inclusive, so consecutive pages share a trade; keeping track of the IDs already seen makes
+the overlap harmless (`kraken_rest.pages_between_ids`).
 
 ### Flink SQL on a stream
 
@@ -347,3 +347,90 @@ BTC's or ETH's, so their spreads simply ended there, at a point that depended on
 `flink drain` now first waits until each job's Kafka source has nothing left to read (its
 `pendingRecords` metric, `ticklab/flinkctl.py`). After that, two replays of the day agree, and
 every one of their 152,691 spreads equals the plain-Python recomputation from the same history.
+
+## Milestone 5: how fast, and at what cost
+
+### Three latencies, three clocks
+
+"How long does a trade take?" has no single answer, so the project measures three, each from
+timestamps that really exist (`ticklab/bench.py`, the "Pipeline" dashboard):
+
+- **Feed latency:** received by our producer minus the exchange's trade time. It mixes two
+  clocks, the exchange's and ours, so it includes their offset and can even be negative
+  (Kraken's median was 0.3 s in one session and −23 ms in another, on a different virtual
+  machine; a negative delay can only come from the clocks).
+- **Pipeline latency:** stored in ClickHouse minus published to Kafka, both on our clock. It is
+  dominated by ClickHouse reading Kafka in blocks, every few seconds, not by any processing.
+- **Output latency:** a candle emitted by Flink minus the publishing of the newest trade in it,
+  our clock again. A candle can only come out once the watermark passes the end of its
+  minute, and the watermark waits for the quietest feed, so this measures waiting more than
+  processing (below).
+
+One trap: a Kafka record's timestamp is "publish time" only if the producer sets it so. Flink's
+Kafka sink stamps each record with its event time instead, so a candle's Kafka timestamp is the
+end of its minute, not when it was sent.
+
+### Throughput, lag and backpressure
+
+A replay sends trades on a schedule: at 10x, the hour of trades in 6 minutes. If the pipeline
+keeps up, the Flink sources' *consumer lag* (trades published but not yet read, their
+`pendingRecords`) stays near zero. If it doesn't, lag grows, and a busy operator makes the ones
+before it wait for buffer space: *backpressure*, visible in Flink as busy time near 1,000 ms
+per second on one task and "backpressured" time on those upstream.
+
+Benchmarking honestly means the load generator mustn't be the bottleneck. Turning a CSV row
+into an Avro message in Python takes longer than Kafka needs to store it, so the benchmark
+encodes the whole hour first and starts the clock only for sending.
+
+At 100x the busiest hour is 37,800 trades a second. Kafka accepted every one on time on both
+machines, so the sending rate says nothing about whether the pipeline keeps up; lag does. On 2
+cores, shared by Redpanda, ClickHouse, both Flink jobs and the replay itself, the jobs fell up
+to 664,000 trades behind. On 4 cores, with parallelism 2, never more than 19,000.
+
+Candles came out sooner at 10x than at 1x: 0.6 s after their newest trade in the median,
+against 4.6 s. The watermark is the minimum over all seven feeds, so a minute's candles wait
+until the quietest feed trades past the minute's end. That wait is measured in trade time, and
+a 10x replay runs through trade time ten times faster. Live, idleness ends the wait after 10 s
+of silence, which is why live candles come out about 10 s after their minute.
+
+### Changing a job that has state
+
+A savepoint files state by *operator ID*, and a restarted job gets each operator's state back
+by the same ID. An operator given a fixed ID in the code (`.uid("divergence-alerts")`) keeps it
+whatever else changes. One without gets an ID computed from its place in the graph, so a change
+nearby gives it a new one. Flink then finds state in the savepoint that no operator takes, and
+refuses to start rather than drop it silently.
+
+Milestone 5 hit this. Computing the 1-second bars once instead of once per query changed the SQL
+operators, whose IDs Flink SQL generates, and the signals job's savepoint from milestone 4 no
+longer fitted. The signals job is now resumed with `allowNonRestoredState`
+(`ticklab/flinkctl.py`). Every operator with a fixed ID gets its state back: the Kafka offsets,
+deduplication, the alerts' state machines. The SQL operators' state, a few seconds of bars and
+the latest prices, is dropped, and the JobManager logs each operator it skips (32 of them here).
+The core job keeps Flink's strict default. Its state is the open candles themselves, so a
+mismatch there should stop the start, not pass unnoticed.
+
+Changing what an operator stores is a different matter. The candle accumulator gained a field in
+this milestone, and the core job still resumed from its old savepoint: Flink stores the class as
+a *POJO* (public fields, a no-argument constructor), and a POJO may gain fields, which start at
+Java's default, here 0.
+
+### Zero, or nothing measured?
+
+The milestone 5 check asks Grafana for every panel's data, and it found a figure that had never
+worked. Gap repair serves metrics, but Prometheus had no job to scrape it, so its "trades
+fetched" figure showed 0 all along: the query ended in `or vector(0)`, which turns "no series"
+into 0. A dashboard can't tell "nothing happened" from "nothing measured" unless the metrics
+exist from the start. Gap repair now creates its labelled series at 0 when it starts, the figure
+lost its fallback, and the check requires Prometheus's own `up` metric to be 1 for every service
+that serves metrics.
+
+The same evening showed what gap repair couldn't do. The stack had been stopped for 8 hours, so
+1.7 million Binance trades were missing: 72 minutes of requests at gap repair's budget, all held
+in memory, while every newer gap waited behind them. The repair was cut short when its container
+restarted, and because the consumer had committed each gap's offset soon after reading it, none
+of the three gaps was ever reported REPAIRED or FAILED. Now an offset is *stored* for commit
+only once the gap's outcome is reported (`enable.auto.offset.store` off, then `store_offsets`):
+the same at-least-once rule as Flink's checkpoints, where input counts as read only once its
+results are safe. A gap too large to repair within the candles' lateness budget is reported
+FAILED at once, with its size (decision note 0011).

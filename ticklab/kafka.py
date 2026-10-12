@@ -46,15 +46,21 @@ class TradePublisher:
         self.failed = 0
 
     def publish(self, trade: Trade) -> None:
+        self.publish_encoded(*self.encode(trade))
+
+    def encode(self, trade: Trade) -> tuple[int, bytes, bytes]:
+        """The trade as it goes on the topic: (partition, key, value)."""
         feed = self._feeds[(trade.exchange, trade.symbol)]
-        value = self._encoder.encode(trade)
+        return feed.partition, feed.key, self._encoder.encode(trade)
+
+    def publish_encoded(self, partition: int, key: bytes, value: bytes) -> None:
         while True:
             try:
                 self._producer.produce(
                     self._topic,
                     value=value,
-                    key=feed.key,
-                    partition=feed.partition,
+                    key=key,
+                    partition=partition,
                     on_delivery=self._on_delivery,
                 )
                 break

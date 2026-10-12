@@ -31,6 +31,8 @@ public class CandleAggregate
         }
         candle.high = candle.high == null ? trade.price : candle.high.max(trade.price);
         candle.low = candle.low == null ? trade.price : candle.low.min(trade.price);
+        candle.newestPublishedMillis =
+                Math.max(candle.newestPublishedMillis, trade.publishTimeMillis);
         candle.volume = candle.volume.add(trade.quantity);
         candle.quoteVolume = candle.quoteVolume.add(notional);
         if (trade.takerBuy) {
@@ -67,6 +69,7 @@ public class CandleAggregate
         merged.quoteVolume = a.quoteVolume.add(b.quoteVolume);
         merged.takerBuyVolume = a.takerBuyVolume.add(b.takerBuyVolume);
         merged.takerBuyQuoteVolume = a.takerBuyQuoteVolume.add(b.takerBuyQuoteVolume);
+        merged.newestPublishedMillis = Math.max(a.newestPublishedMillis, b.newestPublishedMillis);
         return merged;
     }
 }

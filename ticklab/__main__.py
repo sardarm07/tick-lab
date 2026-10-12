@@ -107,7 +107,12 @@ def _parser() -> argparse.ArgumentParser:
     command.add_argument("--speed", type=float, default=10)
     command.set_defaults(run=_e2e)
 
-    command = commands.add_parser("study", help="the M1 data study")
+    command = commands.add_parser("bench", help="replay the busiest hour and measure it")
+    command.add_argument("--speed", type=float, required=True)
+    command.add_argument("--profile", choices=["lite", "full"], required=True)
+    command.set_defaults(run=_bench)
+
+    command = commands.add_parser("study", help="the data studies")
     studies = command.add_subparsers(required=True)
     sub = studies.add_parser("disorder", help="arrival disorder in recordings")
     _time_range(sub)
@@ -410,6 +415,12 @@ def _e2e(settings: Settings, args: argparse.Namespace) -> int:
     from ticklab.checks import e2e
 
     return e2e.run(settings, args.fixture, args.seed, args.speed)
+
+
+def _bench(settings: Settings, args: argparse.Namespace) -> None:
+    from ticklab import bench
+
+    print(bench.run(settings, args.speed, args.profile).with_suffix(".md").read_text())
 
 
 def _study_disorder(settings: Settings, args: argparse.Namespace) -> None:

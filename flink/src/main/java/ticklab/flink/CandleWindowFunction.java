@@ -39,6 +39,7 @@ public class CandleWindowFunction
                 .setFirstTradeId(candle.firstTradeId)
                 .setLastTradeId(candle.lastTradeId)
                 .setEmittedAt(Instant.ofEpochMilli(context.currentProcessingTime()))
+                .setInputPublishedAt(Instant.ofEpochMilli(candle.newestPublishedMillis))
                 .build());
     }
 }

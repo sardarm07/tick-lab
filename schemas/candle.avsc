@@ -53,6 +53,12 @@
       "name": "emitted_at",
       "type": {"type": "long", "logicalType": "timestamp-millis"},
       "doc": "Processing time when this version of the candle was emitted"
+    },
+    {
+      "name": "input_published_at",
+      "type": {"type": "long", "logicalType": "timestamp-millis"},
+      "default": 0,
+      "doc": "When the newest trade in this version of the candle was published to Kafka: emitted_at minus this is the candle's output latency"
     }
   ]
 }

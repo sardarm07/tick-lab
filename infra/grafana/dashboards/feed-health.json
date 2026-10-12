@@ -372,7 +372,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(ticklab_gap_repair_trades_total[1h])) or vector(0)",
+          "expr": "sum(increase(ticklab_gap_repair_trades_total[1h]))",
           "legendFormat": "trades fetched"
         },
         {

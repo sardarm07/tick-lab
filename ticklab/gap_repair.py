@@ -13,6 +13,12 @@ on the `gaps` topic under the same key.
   tests lift the budget.
 - Kraken: `Trades` pages from a time, not an ID. The time comes from the trade just before the
   gap, which is already stored in ClickHouse. At most one request a second.
+
+Repair is for gaps whose trades can still reach their candles. A gap of more than MAX_TRADES
+comes from downtime, such as the stack being stopped for hours. Fetching it would take Binance's
+budget an hour and hold up every gap behind it, so it is reported FAILED at once, with its size.
+Trades are published a page at a time, and a gap counts as handled only once its outcome is
+reported: a repair cut short by a restart is done again, not skipped.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ import os
 import threading
 import time
 from collections import deque
+from collections.abc import Iterator
 from datetime import UTC, datetime
 
 import httpx
@@ -41,6 +48,9 @@ log = logging.getLogger(__name__)
 WEIGHT_PER_MINUTE = 600
 HISTORICAL_TRADES_WEIGHT = 25
 KRAKEN_REQUEST_INTERVAL_S = 1.0
+# About 2 minutes of Binance requests at the budget above, well within the candles' 5-minute
+# lateness budget. The busiest hour of any pair in the data study averaged 14,500 trades a minute.
+MAX_TRADES = 50_000
 
 GAPS = Counter("ticklab_gap_repair_gaps", "Gaps handled, by outcome", ["symbol", "outcome"])
 FETCHED = Counter("ticklab_gap_repair_trades", "Missing trades fetched and published", ["symbol"])
@@ -94,8 +104,15 @@ class GapRepair:
                 "group.id": "gap-repair",
                 "auto.offset.reset": "earliest",
                 "enable.auto.commit": True,
+                # Only offsets stored by `run`, once a gap has been handled, are committed.
+                "enable.auto.offset.store": False,
             }
         )
+        # Every series exists from the start, so a dashboard shows 0 rather than nothing.
+        for feed in feeds:
+            FETCHED.labels(feed.symbol)
+            for outcome in ("repaired", "failed"):
+                GAPS.labels(feed.symbol, outcome)
 
     def run(self, stop: threading.Event) -> None:
         self._consumer.subscribe(["gaps"])
@@ -107,6 +124,7 @@ class GapRepair:
                 gap = self._registry.decode(message.value())
                 if gap["status"] == "DETECTED":
                     self.repair(gap)
+                self._consumer.store_offsets(message)
         finally:
             self._consumer.close()
             self._trades.flush()
@@ -119,34 +137,43 @@ class GapRepair:
             log.warning("no repair source for %s %s", gap["exchange"], gap["symbol"])
             return
         wanted = last - first + 1
+        if wanted > MAX_TRADES:
+            detail = f"{wanted} missing, more than the {MAX_TRADES} fetched"
+            log.warning("%s: %d..%d not fetched: %s", feed.symbol, first, last, detail)
+            GAPS.labels(feed.symbol, "failed").inc()
+            self._report(gap, "FAILED", 0, detail)
+            return
         log.info("%s: fetching %d missing trades %d..%d", feed.symbol, wanted, first, last)
+        found = 0
         try:
             if feed.exchange == kraken.EXCHANGE:
-                found = self._fetch_kraken(feed, first, last)
+                pages = self._fetch_kraken(feed, first, last)
             else:
-                found = self._fetch_binance(feed, first, last)
+                pages = self._fetch_binance(feed, first, last)
+            for page in pages:
+                received = now_us()
+                for trade in page:
+                    self._trades.publish(dataclasses.replace(trade, received_time=received))
+                FETCHED.labels(feed.symbol).inc(len(page))
+                found += len(page)
         except (httpx.HTTPError, RuntimeError) as exc:
             log.warning("%s: repair of %d..%d failed: %r", feed.symbol, first, last, exc)
+            self._trades.flush(30)
             GAPS.labels(feed.symbol, "failed").inc()
-            self._report(gap, "FAILED", 0, repr(exc)[:200])
+            self._report(gap, "FAILED", found, f"{found} of {wanted} found, then {exc!r}"[:200])
             return
-        received = now_us()
-        for trade in found:
-            self._trades.publish(dataclasses.replace(trade, received_time=received))
         self._trades.flush(30)
-        FETCHED.labels(feed.symbol).inc(len(found))
         detected = gap["updated_at"]
         DELAY.observe(max(0.0, time.time() - detected.timestamp()))
-        outcome = "REPAIRED" if len(found) == wanted else "FAILED"
+        outcome = "REPAIRED" if found == wanted else "FAILED"
         GAPS.labels(feed.symbol, outcome.lower()).inc()
-        self._report(gap, outcome, len(found), f"{len(found)} of {wanted} trades found")
-        log.info("%s: %d..%d %s (%d of %d)", feed.symbol, first, last, outcome, len(found), wanted)
+        self._report(gap, outcome, found, f"{found} of {wanted} trades found")
+        log.info("%s: %d..%d %s (%d of %d)", feed.symbol, first, last, outcome, found, wanted)
 
-    def _fetch_binance(self, feed: Feed, first: int, last: int) -> list[Trade]:
+    def _fetch_binance(self, feed: Feed, first: int, last: int) -> Iterator[list[Trade]]:
         wait = self._binance_blocked_until - time.monotonic()
         if wait > 0:
             raise RuntimeError(f"Binance rate limit: no requests for another {wait:.0f} s")
-        found: list[Trade] = []
         next_id = first
         while next_id <= last:
             self._limiter.spend(HISTORICAL_TRADES_WEIGHT)
@@ -162,12 +189,11 @@ class GapRepair:
                 self._binance_blocked_until = time.monotonic() + exc.retry_after_s
                 raise
             if not page:
-                break
-            found += [t for t in page if t.trade_id <= last]
+                return
+            yield [t for t in page if t.trade_id <= last]
             next_id = page[-1].trade_id + 1
-        return found
 
-    def _fetch_kraken(self, feed: Feed, first: int, last: int) -> list[Trade]:
+    def _fetch_kraken(self, feed: Feed, first: int, last: int) -> Iterator[list[Trade]]:
         """Kraken pages trades by time: start at the trade before the gap and page forward.
 
         `since` is in nanoseconds. Stored times are microseconds: from the WebSocket, Kraken's
@@ -175,7 +201,7 @@ class GapRepair:
         binary floating-point seconds. Starting 1 µs before the stored time covers both.
         """
         since = (self._time_before(feed, first) - 1) * 1000
-        return kraken_rest.trades_between_ids(
+        return kraken_rest.pages_between_ids(
             self._client, self._settings.kraken_rest_url, feed, since, first, last, self._pace
         )
 

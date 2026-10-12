@@ -1,0 +1,50 @@
+{
+ "profile": "full",
+ "speed": 1.0,
+ "hour": "2026-10-08T15:00:00+00:00",
+ "trades": 1362042,
+ "replay_seconds": 3599.9,
+ "due_seconds": 3600.0,
+ "trades_per_second": 378,
+ "kept_schedule": true,
+ "drain_and_settle_seconds": 26.3,
+ "undelivered": 0,
+ "failed": 0,
+ "max_consumer_lag": {
+  "ticklab_core": 0,
+  "ticklab_signals": 0
+ },
+ "pipeline_latency_ms": {
+  "n": 1362042,
+  "p50": 2586.0,
+  "p95": 4855.0,
+  "p99": 5063.0,
+  "max": 5601.0
+ },
+ "output_latency_ms": {
+  "n": 420,
+  "p50": 4586.0,
+  "p95": 9736.0,
+  "p99": 15387.0,
+  "max": 19283.0
+ },
+ "checkpoints": {
+  "ticklab_core": {
+   "longest_ms": 34.0,
+   "largest_kb": 41.0
+  },
+  "ticklab_signals": {
+   "longest_ms": 74.0,
+   "largest_kb": 140.9
+  }
+ },
+ "peak_memory_mib": {
+  "clickhouse": 713,
+  "flink-jobmanager": 715,
+  "flink-taskmanager": 1866,
+  "gap-repair": 52,
+  "grafana": 270,
+  "prometheus": 173,
+  "redpanda": 426
+ }
+}

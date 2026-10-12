@@ -116,7 +116,13 @@ public final class SignalsPipeline {
                 .columnByMetadata("rowtime", "TIMESTAMP_LTZ(3)")
                 .watermark("rowtime", "SOURCE_WATERMARK()")
                 .build()));
-        tables.createTemporaryView("bars_1s", tables.sqlQuery(BARS_1S));
+        // The bars are computed once and pass through a DataStream: as a view, every query that
+        // reads them would get its own copy of the window aggregation, each with its own filter
+        // pushed into it (four copies of the busiest work in the job).
+        DataStream<Row> bars = tables.toDataStream(tables.sqlQuery(BARS_1S));
+        tables.createTemporaryView("bars_1s", tables.fromDataStream(bars, Schema.newBuilder()
+                .watermark("bar_time", "SOURCE_WATERMARK()")
+                .build()));
         tables.createTemporaryView("usd_per_usdt", tables.sqlQuery(USD_PER_USDT));
         tables.createTemporaryView("kraken_in_usdt", tables.sqlQuery(KRAKEN_IN_USDT));
         tables.createTemporaryView("kraken_latest", tables.sqlQuery(KRAKEN_LATEST));

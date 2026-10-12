@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS ticklab.spread_1s
     spread_bps        Decimal(28, 12),
     kraken_age_ms     Int64,
     rate_age_ms       Int64,
-    published_at      DateTime64(3, 'UTC'),
+    published_at      DateTime64(3, 'UTC') COMMENT 'Kafka timestamp, which Flink sets to the event time: the end of the second',
     inserted_at       DateTime64(3, 'UTC') DEFAULT now64(3)
 )
 ENGINE = ReplacingMergeTree

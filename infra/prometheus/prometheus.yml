@@ -15,6 +15,10 @@ scrape_configs:
     static_configs:
       - targets: ["reconciler:8000"]
 
+  - job_name: gap-repair
+    static_configs:
+      - targets: ["gap-repair:8000"]
+
   - job_name: flink
     static_configs:
       - targets: ["flink-jobmanager:9249", "flink-taskmanager:9249"]

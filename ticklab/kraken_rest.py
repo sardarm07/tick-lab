@@ -19,7 +19,7 @@ Checked live 2026-10-11:
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -60,7 +60,7 @@ def trades_since(
     return parse_trades_page(text, feed)
 
 
-def trades_between_ids(
+def pages_between_ids(
     client: httpx.Client,
     base: str,
     feed: Feed,
@@ -68,17 +68,21 @@ def trades_between_ids(
     first: int,
     last: int,
     wait: Callable[[], None],
-) -> list[Trade]:
-    """Every trade with first <= ID <= last, paging forward from `since_ns`, which must not be
-    later than trade `first`. `wait` runs before each request, to pace them. Pages overlap by
-    their boundary trade (`since` is inclusive), so trades are collected by ID."""
-    found: dict[int, Trade] = {}
+) -> Iterator[list[Trade]]:
+    """Every trade with first <= ID <= last, a page at a time, paging forward from `since_ns`,
+    which must not be later than trade `first`. `wait` runs before each request, to pace them.
+    Pages overlap by their boundary trade (`since` is inclusive), so each trade is yielded once,
+    by ID."""
+    seen: set[int] = set()
     while True:
         wait()
         trades, next_since = trades_since(client, base, feed, since_ns)
-        found.update((t.trade_id, t) for t in trades if first <= t.trade_id <= last)
+        page = {t.trade_id: t for t in trades if first <= t.trade_id <= last}
+        if fresh := [page[trade_id] for trade_id in sorted(page.keys() - seen)]:
+            seen.update(page)
+            yield fresh
         if not trades or trades[-1].trade_id >= last or next_since <= since_ns:
-            return [found[trade_id] for trade_id in sorted(found)]
+            return
         since_ns = next_since
 
 

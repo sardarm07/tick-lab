@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS ticklab.candles
     first_trade_id         Int64,
     last_trade_id          Int64,
     emitted_at             DateTime64(3, 'UTC'),
-    published_at           DateTime64(3, 'UTC'),
+    input_published_at     DateTime64(3, 'UTC') COMMENT 'Kafka timestamp of the newest trade in it',
+    published_at           DateTime64(3, 'UTC') COMMENT 'Kafka timestamp, which Flink sets to the event time: the end of the minute',
     inserted_at            DateTime64(3, 'UTC') DEFAULT now64(3)
 )
 ENGINE = ReplacingMergeTree(trade_count)
@@ -47,7 +48,8 @@ CREATE TABLE IF NOT EXISTS ticklab.candles_queue
     trade_count            Int64,
     first_trade_id         Int64,
     last_trade_id          Int64,
-    emitted_at             DateTime64(3, 'UTC')
+    emitted_at             DateTime64(3, 'UTC'),
+    input_published_at     DateTime64(3, 'UTC')
 )
 ENGINE = Kafka
 SETTINGS
@@ -64,7 +66,7 @@ SELECT
     exchange, symbol, minute, open, high, low, close, volume, quote_volume,
     taker_buy_volume, taker_buy_quote_volume, vwap,
     toUInt64(trade_count) AS trade_count, first_trade_id, last_trade_id, emitted_at,
-    assumeNotNull(_timestamp_ms) AS published_at
+    input_published_at, assumeNotNull(_timestamp_ms) AS published_at
 FROM ticklab.candles_queue;
 
 -- Trades that reached Flink after their candle's lateness budget: kept, never dropped.
@@ -79,7 +81,7 @@ CREATE TABLE IF NOT EXISTS ticklab.late_trades
     trade_time    DateTime64(6, 'UTC'),
     received_time Nullable(DateTime64(6, 'UTC')),
     source        Enum8('WS' = 1, 'WS_SNAPSHOT' = 2, 'REST' = 3, 'HISTORY' = 4),
-    published_at  DateTime64(3, 'UTC') COMMENT 'when Flink sent it to late-trades',
+    published_at  DateTime64(3, 'UTC') COMMENT 'Kafka timestamp, which Flink sets to the event time: the trade time',
     inserted_at   DateTime64(3, 'UTC') DEFAULT now64(3)
 )
 ENGINE = ReplacingMergeTree

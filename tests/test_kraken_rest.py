@@ -79,26 +79,28 @@ def fake_kraken(page_size: int = 4) -> tuple[httpx.Client, list[int]]:
     return httpx.Client(transport=httpx.MockTransport(handler)), requests
 
 
-def test_trades_between_ids_pages_forward_and_keeps_each_trade_once():
+def test_pages_between_ids_page_forward_and_yield_each_trade_once():
     client, requests = fake_kraken()
     # The trade before the gap, 110963981, was stored at 1791708508.416273 s; gap repair starts
     # 1 µs earlier.
     since = (kraken.seconds_micros("1791708508.4162734") - 1) * 1000
     waits = []
-    trades = kraken_rest.trades_between_ids(
+    pages = kraken_rest.pages_between_ids(
         client, "http://kraken", BTC, since, 110963982, 110963986, lambda: waits.append(1)
     )
-    assert [t.trade_id for t in trades] == list(range(110963982, 110963987))
+    assert [t.trade_id for page in pages for t in page] == list(range(110963982, 110963987))
     assert len(requests) == len(waits) == 3  # pages overlap at their boundary trades
 
 
-def test_trades_between_ids_stops_at_the_newest_trade():
+def test_pages_between_ids_stop_at_the_newest_trade():
     client, requests = fake_kraken()
     since = 1791708523276200000
-    trades = kraken_rest.trades_between_ids(
-        client, "http://kraken", BTC, since, 110963986, 110963995, lambda: None
+    pages = list(
+        kraken_rest.pages_between_ids(
+            client, "http://kraken", BTC, since, 110963986, 110963995, lambda: None
+        )
     )
-    assert [t.trade_id for t in trades] == [110963986, 110963987, 110963988]
+    assert [[t.trade_id for t in page] for page in pages] == [[110963986, 110963987, 110963988]]
     assert len(requests) == 2  # the second page holds only the boundary trade
 
 

@@ -43,12 +43,15 @@ at a given moment. Alerts then watch the spread and each feed's minutes.
   tables' state and clears old versions as the watermark passes them.
 - 1-second windows drop trades that come later than the watermark, such as repaired ones: the
   spread is a live signal. Candles, which accept late data for 5 minutes, stay the exact record.
-- Changing the SQL changes the operators Flink generates, so a savepoint of the signals job may
-  not restore into a changed query; the job is then started without state. It holds only the
-  last minutes of data, so little is lost.
-- The signals job does more work per trade than the core job (the planner computes the
-  1-second bars once for each query that reads them), so after a fast replay it runs minutes
-  behind. Draining stops a source where it has read to, so `flink drain` first
-  waits until every job has read all of its input (milestone 4 found this: two replays of a day
-  disagreed until it did).
+- Flink SQL generates its operators' IDs from the query, so after a change to the query a
+  savepoint's SQL state has no operator to go to. The signals job is therefore resumed with
+  `allowNonRestoredState` (`ticklab/flinkctl.py`): the operators with fixed IDs (the Kafka
+  source's offsets, deduplication, the alerts' state machines) get their state back, and the SQL
+  operators' state is dropped. It holds a few seconds of bars and the latest prices, so little
+  is lost. Milestone 5 needed this the first time the query changed.
+- In milestone 4 the planner computed the 1-second bars once for each query that read them, so
+  the signals job did more work per trade than the core job and ran minutes behind after a
+  fast replay. Milestone 5 computes them once, through a DataStream. Draining stops a source
+  where it has read to, so `flink drain` first waits until every job has read all of its input
+  (milestone 4 found this: two replays of a day disagreed until it did).
 - The thresholds come from a week of history (decision 0018).

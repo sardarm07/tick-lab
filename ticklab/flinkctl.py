@@ -4,7 +4,11 @@ There are two jobs, `core` (candles, gaps, feed health) and `signals` (spreads a
 in one jar on one session cluster.
 
 - `start` submits a job unless it is running, resuming from the stack's last savepoint of that
-  job when there is one, so `make down` and `make up` lose no state.
+  job when there is one, so `make down` and `make up` lose no state. Flink matches saved state
+  to operators by their IDs. The core job's stateful operators all have fixed IDs, and a
+  savepoint whose state finds no operator fails the start. The signals job's SQL operators get
+  IDs generated from the query, so after a change to the query their state is dropped and the
+  rest restored (decision 0017).
 - `stop` stops a job with a savepoint (state and Kafka offsets kept, nothing emitted early).
 - `drain` stops it with `--drain`: event time jumps to the end, so every open window and timer
   fires. Replays and tests end this way, because a bounded input's last minutes would otherwise
@@ -31,10 +35,14 @@ class Job:
     key: str
     name: str
     entry_class: str
+    # Resume even when some of the savepoint's state has no operator left to take it.
+    allow_non_restored_state: bool = False
 
 
 CORE = Job("core", "ticklab-core", "ticklab.flink.CoreJob")
-SIGNALS = Job("signals", "ticklab-signals", "ticklab.flink.SignalsJob")
+SIGNALS = Job(
+    "signals", "ticklab-signals", "ticklab.flink.SignalsJob", allow_non_restored_state=True
+)
 JOBS = (CORE, SIGNALS)
 JAR = ROOT / "flink" / "target" / "ticklab-flink.jar"
 SAVEPOINTS = "file:///flink-data/savepoints"
@@ -68,6 +76,7 @@ class Flink:
         last = self._last_savepoint(job)
         if last.exists():
             body["savepointPath"] = last.read_text().strip()
+            body["allowNonRestoredState"] = job.allow_non_restored_state
             log.info("%s: resuming from %s", job.name, body["savepointPath"])
         response = self._client.post(f"/jars/{jar_id}/run", json=body)
         if response.status_code != 200:

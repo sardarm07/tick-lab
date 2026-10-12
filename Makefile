@@ -24,7 +24,8 @@ E2E := $(COMPOSE) -f compose.yaml -f compose.ci.yaml
 .PHONY: help up down ps logs console replay-up replay-down replay replay-history \
 	replay-kraken-history replay-drain record history kraken-history study-disorder study-gaps \
 	study-signals reconcile fixture e2e e2e-kraken chaos fail-taskmanager fail-producer \
-	fail-network lint test test-java ci check-m1 check-m2 check-m3 check-m4 codespace-network
+	fail-network bench lint test test-java ci check-m1 check-m2 check-m3 check-m4 check-m5 \
+	codespace-network
 
 JAR := flink/target/ticklab-flink.jar
 JAVA_SOURCES := $(shell find flink/src/main schemas -type f) flink/pom.xml
@@ -134,6 +135,15 @@ chaos: .env ## The end-to-end test with another seed: make chaos SEED=11
 e2e-kraken: .env ## The end-to-end test on the Kraken fixture: Kraken's gap repair, by time
 	$(MAKE) e2e FIXTURE=$(KRAKEN_FIXTURE) EXCHANGES=KRAKEN
 
+# The busiest hour of the history, replayed into an empty replay stack sized by the profile.
+# The stack stays up afterwards for its dashboards; `make replay-down` removes it.
+PROFILE ?= lite
+SPEED ?= 10
+
+bench: .env codespace-network $(JAR) | data/history ## Benchmark: the busiest hour, replayed: make bench SPEED=1|10|100 PROFILE=lite|full
+	$(MAKE) replay-up SIZE=$(PROFILE) EXCHANGES=BINANCE,KRAKEN
+	TICKLAB_STACK=replay $(UV_ENV) python -m ticklab bench --speed $(SPEED) --profile $(PROFILE)
+
 fail-taskmanager: ## Failure: the Flink TaskManager dies and comes back 10 s later
 	docker kill ticklab-flink-taskmanager-1
 	sleep 10
@@ -186,3 +196,6 @@ check-m3: .env | data/recordings ## The M3 checks (about 90 minutes)
 
 check-m4: .env | data/recordings data/history ## The M4 checks (about 5 hours)
 	$(UV_ENV) python -m ticklab.checks.m4
+
+check-m5: .env | data/history ## The M5 checks for one profile: make check-m5 PROFILE=lite|full
+	$(UV_ENV) python -m ticklab.checks.m5 --profile $(PROFILE)
